@@ -10,13 +10,20 @@
   "main": "extension.js",
   "contributes": {
     "commands": [
-      { "command": "saga.openEvidenceCard", "title": "Saga: Open Evidence Card" }
+      { "command": "saga.openEvidenceCard", "title": "Saga: Open Evidence Card" },
+      { "command": "saga.runTests", "title": "Saga: Run Tests for Current Function" }
     ],
     "configuration": {
       "properties": {
         "saga.fixturePath": {
           "type": "string",
           "description": "Optional path to a serialized Saga evidence card fixture."
+        },
+        "saga.pytestArgs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Additional arguments passed to pytest when collecting test observations."
         }
       }
     }

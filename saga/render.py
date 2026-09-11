@@ -20,6 +20,17 @@ def terminal(card: dict[str, Any]) -> str:
             for dependency in statement["dependencies"]:
                 span = dependency["source_span"]
                 lines.append(f"    Dependency [{dependency['kind']}] at {span['path']}:{span['start_line']}")
+        if claim["evidence"]["evidence_class"] == "observed":
+            detail = claim["evidence"].get("detail", {})
+            lines.append(f"    Support: {detail.get('support', 0)} distinct inputs")
+            if detail.get("supporting_tests"):
+                lines.append(f"    Supporting tests: {', '.join(detail['supporting_tests'])}")
+            if detail.get("input_domain"):
+                lines.append(f"    Input domain: {json.dumps(detail['input_domain'], sort_keys=True)}")
+            if detail.get("return_domain"):
+                lines.append(f"    Return domain: {json.dumps(detail['return_domain'], sort_keys=True)}")
+            if detail.get("raised_executions"):
+                lines.append(f"    Raised executions: {detail['raised_executions']}")
         for span in claim["source_spans"]:
             lines.append(f"    Source: {span['path']}:{span['start_line']}")
         for assumption in claim["assumptions"]:

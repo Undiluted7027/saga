@@ -1,4 +1,5 @@
 .venv/
+.saga/
 .agents/
 .claude/
 skills-lock.json

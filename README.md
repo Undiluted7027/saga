@@ -1,20 +1,40 @@
 # Saga: evidence-backed Python code intelligence
 
-## Slice 0 VS Code prototype
+## Saga POC
 
-The repository currently contains the fixture-backed evidence-card prototype from
-POC ticket #1. It uses the serialized payload at
-`fixture/process_order.card.json`, validated against
-`schema/evidence-card.schema.json`.
+Saga analyzes one supported Python 3.12 module-level function and returns a
+versioned evidence card. Static claims and test observations are separate, and
+every claim links back to source spans.
 
 To run its focused tests:
 
 ```sh
 npm test
+uv run python -m unittest discover -s tests
 ```
+
+To inspect the fixture target from the CLI:
+
+```sh
+uv run saga inspect fixture/process_order.py::process_order --format terminal
+```
+
+To add test-observed evidence, install/use the optional test extra and run the
+tests through Saga:
+
+```sh
+uv sync --extra test
+uv run --extra test saga test fixture/process_order.py::process_order \
+  --format terminal -- fixture/test_process_order.py
+```
+
+The default trace is written to `.saga/trace.json`. It is bounded, redacts
+sensitive fields, records the Python environment, and is an observation input;
+it is not proof of behavior outside the recorded executions.
 
 To try the editor flow, open this repository in VS Code, install the repository
 as an extension through the Extension Development Host (`Run Extension`), and
-open `fixture/process_order.py`. Hover over `process_order`, then open the
-detailed card and select a source link. The prototype intentionally uses fixture
-data; real analysis, caching, and indexing belong to later slices.
+open `fixture/process_order.py`. Place the cursor on `process_order`, then use
+`Saga: Open Evidence Card`. In the card, choose `Run tests for this function`
+to see derived and observed claims in separate sections. Source links navigate
+back to the supporting code.
