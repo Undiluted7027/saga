@@ -1,18 +1,36 @@
 const vscode = require('vscode');
+const cp = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-const { loadCard, validateCard, hoverLines } = require('./card');
+const { validateCard, hoverLines } = require('./card');
 
-function cardPath(context) {
-  const configured = vscode.workspace.getConfiguration('saga').get('fixturePath');
-  return configured ? path.resolve(configured) : path.join(context.extensionPath, 'fixture', 'process_order.card.json');
+function targetName(document, position) {
+  /** Return the function name only when the cursor is on a def statement. */
+  const word = document.getWordRangeAtPosition(position);
+  if (!word) return undefined;
+  const name = document.getText(word);
+  const line = document.lineAt(position.line).text;
+  return /^\s*(?:async\s+)?def\s+/.test(line) ? name : undefined;
+}
+
+function requestCard(context, document, name) {
+  /** Ask the real Python inspector for the current document and target. */
+  return new Promise((resolve, reject) => {
+    const selector = document.uri.fsPath + '::' + name;
+    cp.execFile('python3', ['-m', 'saga.cli', 'inspect', selector, '--format', 'json'], { cwd: context.extensionPath, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+      if (!stdout) return reject(new Error(stderr.trim() || error?.message || 'Saga inspection failed'));
+      try { resolve(JSON.parse(stdout)); } catch (parseError) { reject(parseError); }
+    });
+  });
 }
 
 function spanRange(span) {
+  /** Convert Saga's one-based inclusive-looking line fields to VS Code ranges. */
   return new vscode.Range(span.start_line - 1, span.start_column, span.end_line - 1, span.end_column);
 }
 
 function resolveSourcePath(span, context) {
+  /** Resolve both repository-relative and workspace-relative evidence paths. */
   const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
   const candidates = [
     path.resolve(root, span.path),
@@ -23,6 +41,7 @@ function resolveSourcePath(span, context) {
 }
 
 async function navigate(span, context) {
+  /** Open, select, and reveal the source span attached to a claim. */
   const uri = vscode.Uri.file(resolveSourcePath(span, context));
   const document = await vscode.workspace.openTextDocument(uri);
   const editor = await vscode.window.showTextDocument(document, { preview: true });
@@ -31,6 +50,7 @@ async function navigate(span, context) {
 }
 
 function panelHtml(card, panel) {
+  /** Render the shared structured result as a navigable webview document. */
   const esc = (value) => String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const claimHtml = card.claims.map((claim) => {
     const links = claim.source_spans.map((span, index) => `<a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(span))}">source ${index + 1}</a>`).join(' · ');
@@ -38,23 +58,36 @@ function panelHtml(card, panel) {
     return `<article><h3>${esc(claim.kind.replaceAll('_', ' '))} <em>${esc(claim.evidence.evidence_class)}</em></h3><p>${esc(claim.statement.text)}</p>${assumptions}<p>${links}</p></article>`;
   }).join('');
   const boundaries = card.boundaries.map((boundary) => `<article class="boundary"><h3>${esc(boundary.kind.replaceAll('_', ' '))}</h3><p><strong>${esc(boundary.target.text)}</strong>: ${esc(boundary.reason)}</p><a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(boundary.source_span))}">source</a></article>`).join('');
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${panel.webview.cspSource};"><style>body{font-family:var(--vscode-font-family);padding:0 2em;line-height:1.45}h1{font-size:1.35em}h3{margin-bottom:.25em;text-transform:capitalize}article{border-top:1px solid var(--vscode-panel-border);padding:.7em 0}em{font-size:.75em;font-weight:normal;background:var(--vscode-textBlockQuote-background);padding:.15em .4em}.boundary{border-left:3px solid var(--vscode-editorWarning-foreground);padding-left:1em}small{display:block;color:var(--vscode-descriptionForeground)}</style></head><body><h1>${esc(card.target.name)}</h1><p><code>${esc(card.target.signature)}</code></p><h2>Claims</h2>${claimHtml}<h2>Boundaries</h2>${boundaries || '<p>None</p>'}</body></html>`;
+  const diagnostics = card.diagnostics.map((diagnostic) => {
+    const source = diagnostic.source_span ? ` <a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(diagnostic.source_span))}">source</a>` : '';
+    return `<article class="diagnostic"><h3>${esc(diagnostic.kind)}</h3><p>${esc(diagnostic.message)}${source}</p></article>`;
+  }).join('');
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${panel.webview.cspSource};"><style>body{font-family:var(--vscode-font-family);padding:0 2em;line-height:1.45}h1{font-size:1.35em}h3{margin-bottom:.25em;text-transform:capitalize}article{border-top:1px solid var(--vscode-panel-border);padding:.7em 0}em{font-size:.75em;font-weight:normal;background:var(--vscode-textBlockQuote-background);padding:.15em .4em}.boundary{border-left:3px solid var(--vscode-editorWarning-foreground);padding-left:1em}.diagnostic{border-left:3px solid var(--vscode-editorError-foreground);padding-left:1em}small{display:block;color:var(--vscode-descriptionForeground)}</style></head><body><h1>${esc(card.target.name)}</h1><p><code>${esc(card.target.signature)}</code></p><h2>Claims</h2>${claimHtml || '<p>None</p>'}<h2>Boundaries</h2>${boundaries || '<p>None</p>'}<h2>Diagnostics</h2>${diagnostics || '<p>None</p>'}</body></html>`;
 }
 
 function activate(context) {
-  const getCard = () => loadCard(cardPath(context));
+  /** Register the fixture-era hover, real inspection, panel, and navigation flows. */
   const provider = vscode.languages.registerHoverProvider('python', { provideHover(document, position) {
-    const word = document.getWordRangeAtPosition(position);
-    if (!word || document.getText(word) !== 'process_order') return undefined;
-    const card = getCard();
-    const errors = validateCard(card);
-    if (errors.length) return new vscode.Hover(`Saga fixture error: ${errors.join(', ')}`);
-    const markdown = new vscode.MarkdownString(hoverLines(card).join('\n'));
-    markdown.isTrusted = { enabledCommands: ['saga.openEvidenceCard', 'saga.navigate'] };
-    return new vscode.Hover(markdown);
+    const name = targetName(document, position);
+    if (!name) return undefined;
+    return requestCard(context, document, name).then((card) => {
+      const errors = validateCard(card);
+      if (errors.length) return new vscode.Hover('Saga result error: ' + errors.join(', '));
+      const markdown = new vscode.MarkdownString(hoverLines(card).join('\n'));
+      markdown.isTrusted = { enabledCommands: ['saga.openEvidenceCard', 'saga.navigate'] };
+      return new vscode.Hover(markdown);
+    }).catch((error) => new vscode.Hover('Saga could not inspect this function: ' + error.message));
   }});
-  const open = vscode.commands.registerCommand('saga.openEvidenceCard', () => {
-    const card = getCard();
+  const open = vscode.commands.registerCommand('saga.openEvidenceCard', async (request) => {
+    const activeEditor = vscode.window.activeTextEditor;
+    const document = request?.path
+      ? await vscode.workspace.openTextDocument(vscode.Uri.file(request.path))
+      : activeEditor?.document;
+    const name = request?.name || (activeEditor && targetName(activeEditor.document, activeEditor.selection.active));
+    if (!document || !name) return vscode.window.showErrorMessage('Open the evidence card from a function hover or place the cursor on a module-level function definition first.');
+    let card;
+    try { card = await requestCard(context, document, name); }
+    catch (error) { return vscode.window.showErrorMessage('Saga inspection failed: ' + error.message); }
     const panel = vscode.window.createWebviewPanel('sagaEvidenceCard', 'Saga Evidence Card', vscode.ViewColumn.Beside, { enableScripts: false, enableCommandUris: ['saga.navigate'] });
     panel.webview.html = panelHtml(card, panel);
   });

@@ -22,5 +22,5 @@ test('hover stays compact and leaves details for the panel', () => {
 });
 
 test('invalid cards produce actionable validation errors', () => {
-  assert.deepEqual(validateCard({}), ['missing schema_version', 'missing target', 'missing claims', 'missing boundaries', 'missing diagnostics', 'schema_version must be 0.1', 'claims must be an array', 'boundaries must be an array']);
+  assert.deepEqual(validateCard({}), ['missing schema_version', 'missing target', 'missing claims', 'missing boundaries', 'missing diagnostics', 'schema_version must be 0.1', 'target.status must be supported or unsupported', 'claims must be an array', 'boundaries must be an array']);
 });

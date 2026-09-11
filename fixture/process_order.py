@@ -1,4 +1,5 @@
 def process_order(order, account, payment_gateway):
+    """Validate an order, charge its subtotal, and mark it ready."""
     if not order.items:
         raise ValueError("order must contain items")
     assert account.active

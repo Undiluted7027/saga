@@ -1,0 +1,68 @@
+import json
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+from saga.inspect import inspect_function
+from saga.render import terminal
+
+
+class InspectFunctionTests(unittest.TestCase):
+    """Exercise successful inspection and conservative target diagnostics."""
+
+    def write(self, text: str) -> str:
+        """Write a temporary Python module and clean it up after the test."""
+        self.tempdir = tempfile.TemporaryDirectory()
+        path = Path(self.tempdir.name) / "module.py"
+        path.write_text(text, encoding="utf-8")
+        self.addCleanup(self.tempdir.cleanup)
+        return str(path)
+
+    def test_valid_module_function_has_metadata_and_no_claims(self):
+        path = self.write("def greet(name: str = 'world') -> str:\n    return name\n")
+        card = inspect_function(path, "greet")
+        self.assertEqual(card["target"]["status"], "supported")
+        self.assertEqual(card["target"]["signature"], "greet(name: str='world')")
+        self.assertEqual(card["target"]["source_span"]["start_line"], 1)
+        self.assertEqual(card["claims"], [])
+        self.assertEqual(card["diagnostics"], [])
+
+    def test_missing_file_and_target_are_diagnostic(self):
+        missing = inspect_function("no-such-file.py", "greet")
+        self.assertEqual(missing["diagnostics"][0]["kind"], "missing_file")
+        path = self.write("def other():\n    pass\n")
+        card = inspect_function(path, "greet")
+        self.assertEqual(card["diagnostics"][0]["kind"], "target_not_found")
+
+    def test_unsupported_targets_are_distinct(self):
+        path = self.write("@decorator\ndef decorated():\n    pass\n\nasync def async_fn():\n    pass\n\ndef generated():\n    yield 1\n")
+        self.assertEqual(inspect_function(path, "decorated")["diagnostics"][0]["kind"], "unsupported_target")
+        self.assertIn("Decorated", inspect_function(path, "decorated")["diagnostics"][0]["message"])
+        self.assertIn("Async", inspect_function(path, "async_fn")["diagnostics"][0]["message"])
+        self.assertIn("Generator", inspect_function(path, "generated")["diagnostics"][0]["message"])
+        self.assertEqual(inspect_function(path, "outer.inner")["diagnostics"][0]["kind"], "unsupported_target")
+
+    def test_malformed_and_ambiguous_inputs_have_spans_or_details(self):
+        malformed = self.write("def broken(:\n")
+        diagnostic = inspect_function(malformed, "broken")["diagnostics"][0]
+        self.assertEqual(diagnostic["kind"], "parsing")
+        self.assertIn("source_span", diagnostic)
+        duplicate = self.write("def same():\n    pass\n\ndef same():\n    pass\n")
+        diagnostic = inspect_function(duplicate, "same")["diagnostics"][0]
+        self.assertEqual(diagnostic["kind"], "ambiguous_target")
+        self.assertIn("2", diagnostic["message"])
+
+    def test_cli_json_and_terminal_render_the_same_card(self):
+        path = self.write("def greet(name):\n    return name\n")
+        result = subprocess.run([sys.executable, "-m", "saga.cli", "inspect", f"{path}::greet"], capture_output=True, text=True, check=True)
+        card = json.loads(result.stdout)
+        self.assertEqual(card["target"]["status"], "supported")
+        terminal_result = subprocess.run([sys.executable, "-m", "saga.cli", "inspect", f"{path}::greet", "--format", "terminal"], capture_output=True, text=True, check=True)
+        self.assertIn(card["target"]["signature"], terminal_result.stdout)
+        self.assertIn(card["target"]["status"], terminal_result.stdout)
+
+
+if __name__ == "__main__":
+    unittest.main()

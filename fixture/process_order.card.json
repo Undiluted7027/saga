@@ -5,6 +5,7 @@
     "qualified_name": "process_order",
     "name": "process_order",
     "signature": "process_order(order, account, payment_gateway)",
+    "status": "supported",
     "source_span": { "path": "fixture/process_order.py", "start_line": 1, "start_column": 0, "end_line": 8, "end_column": 18 }
   },
   "claims": [
