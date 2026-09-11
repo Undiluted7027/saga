@@ -143,4 +143,10 @@ def inspect_function(file_path: str, qualified_name: str) -> dict[str, Any]:
         card["diagnostics"].append(_diagnostic("unsupported_target", "Generator functions are outside the Slice 1 scope.", target_span))
     else:
         card["target"]["status"] = "supported"
+        from .guards import analyze_guards
+
+        guard_claims, guard_boundaries, guard_diagnostics = analyze_guards(file_path, node)
+        card["claims"].extend(guard_claims)
+        card["boundaries"].extend(guard_boundaries)
+        card["diagnostics"].extend(guard_diagnostics)
     return card

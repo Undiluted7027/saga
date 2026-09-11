@@ -63,6 +63,48 @@ class InspectFunctionTests(unittest.TestCase):
         self.assertIn(card["target"]["signature"], terminal_result.stdout)
         self.assertIn(card["target"]["status"], terminal_result.stdout)
 
+    def test_guard_and_exception_claims_preserve_structure_and_spans(self):
+        path = self.write("def charge(amount):\n    if amount <= 0:\n        raise ValueError('amount')\n    return amount\n")
+        card = inspect_function(path, "charge")
+        self.assertEqual([claim["kind"] for claim in card["claims"]], ["rejected_input", "explicit_exception"])
+        guard = card["claims"][0]
+        self.assertEqual(guard["statement"]["type"], "entry_guard")
+        self.assertEqual(guard["statement"]["condition"]["kind"], "comparison")
+        self.assertEqual(guard["statement"]["condition"]["operators"], ["<="])
+        self.assertEqual([span["start_line"] for span in guard["source_spans"]], [2, 3])
+        self.assertTrue(guard["assumptions"])
+        self.assertEqual(guard["statement"]["exit"]["exception"]["name"], "ValueError")
+
+    def test_assertion_records_debug_assumption_and_boolean_negation(self):
+        path = self.write("def active(account):\n    assert not account.active\n    return account\n")
+        card = inspect_function(path, "active")
+        claim = card["claims"][0]
+        self.assertEqual(claim["statement"]["type"], "assertion")
+        self.assertEqual(claim["statement"]["condition"]["kind"], "unary")
+        self.assertEqual(claim["statement"]["condition"]["operator"], "not")
+        self.assertIn("__debug__", claim["assumptions"][0]["text"])
+        self.assertEqual(card["boundaries"][0]["kind"], "dynamic_dispatch")
+
+    def test_uncertain_condition_keeps_claim_and_attaches_boundaries(self):
+        path = self.write("def check(amount, account):\n    if is_valid(amount) and account.active:\n        raise ValueError()\n    return amount\n")
+        card = inspect_function(path, "check")
+        claim = card["claims"][0]
+        self.assertEqual(claim["statement"]["condition"]["kind"], "boolean")
+        self.assertEqual({boundary["kind"] for boundary in card["boundaries"]}, {"unresolved_call", "dynamic_dispatch"})
+        self.assertEqual({boundary["id"] for boundary in card["boundaries"]}, set(claim["boundary_ids"]))
+
+    def test_late_and_nested_guards_are_not_entry_requirements(self):
+        path = self.write("def late(amount):\n    total = amount\n    if amount <= 0:\n        raise ValueError()\n    return total\n\ndef nested(amount):\n    if amount:\n        if amount <= 0:\n            raise ValueError()\n    return amount\n")
+        self.assertEqual(inspect_function(path, "late")["claims"], [])
+        self.assertEqual(inspect_function(path, "nested")["claims"], [])
+
+    def test_unmodeled_condition_is_diagnostic(self):
+        path = self.write("def unknown(amount):\n    if amount <= limit:\n        raise ValueError()\n    return amount\n")
+        card = inspect_function(path, "unknown")
+        self.assertEqual(card["claims"], [])
+        self.assertEqual(card["diagnostics"][0]["kind"], "unsupported_semantics")
+        self.assertIn("source_span", card["diagnostics"][0])
+
 
 if __name__ == "__main__":
     unittest.main()
