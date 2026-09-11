@@ -18,7 +18,7 @@ function requestCard(context, document, name, force = false) {
   try {
     const stat = fs.statSync(document.uri.fsPath);
     stamp = `${stat.mtimeMs}:${stat.size}`;
-  } catch {}
+  } catch { }
   const cacheKey = `${document.uri.fsPath}::${name}::${stamp}`;
   if (!force && staticCardCache.has(cacheKey)) return Promise.resolve(staticCardCache.get(cacheKey));
   return new Promise((resolve, reject) => {
@@ -177,17 +177,19 @@ function showCardPanel(context, card, document, name, view = 'full') {
 
 function activate(context) {
   /** Register the fixture-era hover, real inspection, panel, and navigation flows. */
-  const provider = vscode.languages.registerHoverProvider('python', { provideHover(document, position) {
-    const name = targetName(document, position);
-    if (!name) return undefined;
-    return requestCard(context, document, name).then((card) => {
-      const errors = validateCard(card);
-      if (errors.length) return new vscode.Hover('Saga result error: ' + errors.join(', '));
-      const markdown = new vscode.MarkdownString(hoverLines(card).join('\n'));
-      markdown.isTrusted = { enabledCommands: ['saga.openEvidenceCard', 'saga.navigate'] };
-      return new vscode.Hover(markdown);
-    }).catch((error) => new vscode.Hover('Saga could not inspect this function: ' + error.message));
-  }});
+  const provider = vscode.languages.registerHoverProvider('python', {
+    provideHover(document, position) {
+      const name = targetName(document, position);
+      if (!name) return undefined;
+      return requestCard(context, document, name).then((card) => {
+        const errors = validateCard(card);
+        if (errors.length) return new vscode.Hover('Saga result error: ' + errors.join(', '));
+        const markdown = new vscode.MarkdownString(hoverLines(card).join('\n'));
+        markdown.isTrusted = { enabledCommands: ['saga.openEvidenceCard', 'saga.navigate'] };
+        return new vscode.Hover(markdown);
+      }).catch((error) => new vscode.Hover('Saga could not inspect this function: ' + error.message));
+    }
+  });
   const open = vscode.commands.registerCommand('saga.openEvidenceCard', async (request) => {
     const activeEditor = vscode.window.activeTextEditor;
     const document = request?.path
@@ -241,4 +243,4 @@ function activate(context) {
   );
 }
 
-module.exports = { activate, deactivate: () => {} };
+module.exports = { activate, deactivate: () => { } };
