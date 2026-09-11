@@ -98,6 +98,33 @@ This slice answers “which explicit exception can escape?” on real functions.
 It does not answer “can this function raise at all?” because implicit Python
 errors and third-party call behavior remain outside the model.
 
+### Boundary grouping (#12)
+
+Dogfooded on 2026-09-11 against `evaluate_observations` in
+`saga/observations.py` and `terminal` in `saga/render.py`.
+
+The structured card still contains every boundary occurrence and every original
+boundary ID. The CLI and editor now group occurrences only when the boundary
+kind, target, and stop reason match. A group states the reason once, reports its
+site count, and keeps every location and local call chain available. Different
+failure reasons remain separate.
+
+The default CLI view for `terminal` reduced 99 raw boundary sites to five
+prominent group summaries plus one collapsed routine summary. Its 31
+`lines.append(...)` sites no longer occupy 31 lines unless the developer asks
+for `--show-boundary-sites`. The editor uses the same groups and puts repeated
+locations behind an expandable section.
+
+Routine calls remain available behind `--show-routine-boundaries`. Calls that
+may mutate an unknown receiver, including `append`, `add`, `update`, and `pop`,
+are no longer classified as routine. Module-local stop conditions, dynamic
+behavior, unresolved external calls, and exception-flow limits have distinct
+labels.
+
+Grouping fixes repetition, not every form of noise. `evaluate_observations`
+still has several unique prominent boundaries. Those are separate analysis
+gaps rather than copies of the same warning, so this slice leaves them visible.
+
 ## Later developer evaluation protocol
 
 Run with at least five developers who did not write Saga. Use two comparable
@@ -122,9 +149,9 @@ fixed.
 ```text
 Decision: revise
 Evidence summary: The analyzer and editor flow work. Claims are readable and
-Saga can follow one module-local call with explicit stop conditions. Repeated
-callee facts and boundaries still make real cards noisy, exception reporting is
-limited to explicit raises, and the card has no question-focused views.
+Saga can follow one module-local call, report escaping explicit exceptions, and
+group repeated boundaries without deleting their evidence. Some functions still
+have many distinct analysis gaps, and the card has no question-focused views.
 Before external evaluation: Finish the remaining capability slices in
 docs/poc.md and dogfood them outside the fixture directory. Start developer
 sessions when the card can answer useful questions without fixture-specific

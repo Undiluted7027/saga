@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .boundaries import group_boundaries
+
 
 def _compact_domain(domain: Any) -> str:
     """Render an observed domain without dumping serialized object internals."""
@@ -30,7 +32,46 @@ def _local_call_chain(lines: list[str], chain: list[dict[str, Any]]) -> None:
             lines.append(f"      Arguments: {bindings}")
 
 
-def terminal(card: dict[str, Any]) -> str:
+def _boundary_group(
+    lines: list[str],
+    group: dict[str, Any],
+    prefix: str = "Boundary",
+    show_sites: bool = False,
+) -> None:
+    """Render one group and all of its source-preserving occurrences."""
+    is_call = group["boundary_class"] in {
+        "routine_call",
+        "module_local",
+        "external_or_unresolved_call",
+    }
+    site_label = "call site" if is_call else "source site"
+    if group["count"] != 1:
+        site_label += "s"
+    related = (
+        f"; limits {', '.join(group['claim_kinds'])}"
+        if group["claim_kinds"]
+        else ""
+    )
+    lines.append(
+        f"  {prefix} [{group['boundary_class']} · {group['kind']}] "
+        f"{group['target']} — {group['count']} {site_label}{related}: {group['reason']}"
+    )
+    if group["count"] > 1 and not show_sites:
+        lines.append("    Re-run with --show-boundary-sites to list every source location.")
+        return
+    for occurrence in group["occurrences"]:
+        span = occurrence["source_span"]
+        lines.append(
+            f"    [{occurrence['boundary_id']}] {span['path']}:{span['start_line']}"
+        )
+        _local_call_chain(lines, occurrence["call_chain"])
+
+
+def terminal(
+    card: dict[str, Any],
+    show_routine_boundaries: bool = False,
+    show_boundary_sites: bool = False,
+) -> str:
     """Render the structured card for concise terminal inspection."""
     target = card["target"]
     lines = [f"{target['qualified_name']} {target['status']}", f"  {target['path']}:{target['source_span']['start_line'] if target['source_span'] else '?'}", f"  {target['signature'] or '(signature unavailable)'}", f"  Claims: {len(card['claims'])}"]
@@ -72,17 +113,32 @@ def terminal(card: dict[str, Any]) -> str:
             lines.append(f"    Source: {span['path']}:{span['start_line']}")
         for assumption in claim["assumptions"]:
             lines.append(f"    Assumption: {assumption['text']}")
-    lines.append(f"  Boundaries: {len(card['boundaries'])}")
-    important_boundaries = [boundary for boundary in card["boundaries"] if boundary.get("category") != "routine"]
-    routine_boundaries = [boundary for boundary in card["boundaries"] if boundary.get("category") == "routine"]
-    for boundary in important_boundaries:
-        span = boundary["source_span"]
-        lines.append(f"  Boundary [{boundary['kind']}] {boundary['target']['text']} at {span['path']}:{span['start_line']}: {boundary['reason']}")
-        _local_call_chain(lines, boundary.get("call_chain", []))
-    if routine_boundaries:
-        targets = ", ".join(boundary["target"]["text"] for boundary in routine_boundaries[:6])
-        suffix = " ..." if len(routine_boundaries) > 6 else ""
-        lines.append(f"  Routine unresolved calls ({len(routine_boundaries)}): {targets}{suffix}")
+    groups = group_boundaries(card)
+    important_groups = [group for group in groups if group["category"] != "routine"]
+    routine_groups = [group for group in groups if group["category"] == "routine"]
+    group_label = "group" if len(groups) == 1 else "groups"
+    lines.append(
+        f"  Boundaries: {len(card['boundaries'])} sites in {len(groups)} {group_label}"
+    )
+    for group in important_groups:
+        _boundary_group(lines, group, show_sites=show_boundary_sites)
+    if routine_groups:
+        routine_sites = sum(group["count"] for group in routine_groups)
+        routine_group_label = "group" if len(routine_groups) == 1 else "groups"
+        lines.append(
+            f"  Routine unresolved calls: {routine_sites} sites in "
+            f"{len(routine_groups)} {routine_group_label}"
+        )
+        if show_routine_boundaries:
+            for group in routine_groups:
+                _boundary_group(
+                    lines,
+                    group,
+                    "Routine boundary",
+                    show_sites=show_boundary_sites,
+                )
+        else:
+            lines.append("    Re-run with --show-routine-boundaries to expand them.")
     for diagnostic in card["diagnostics"]:
         lines.append(f"  Diagnostic [{diagnostic['kind']}]: {diagnostic['message']}")
         _local_call_chain(lines, diagnostic.get("call_chain", []))

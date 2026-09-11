@@ -24,10 +24,30 @@ def main(argv: list[str] | None = None) -> int:
     inspect_parser = subparsers.add_parser("inspect", help="inspect one Python function")
     inspect_parser.add_argument("selector", help="target in the form path.py::qualified_name")
     inspect_parser.add_argument("--format", choices=("json", "terminal"), default="json")
+    inspect_parser.add_argument(
+        "--show-routine-boundaries",
+        action="store_true",
+        help="expand groups of routine unresolved calls in terminal output",
+    )
+    inspect_parser.add_argument(
+        "--show-boundary-sites",
+        action="store_true",
+        help="list every source location in repeated boundary groups",
+    )
     test_parser = subparsers.add_parser("test", help="run pytest with selected-target instrumentation")
     test_parser.add_argument("selector", help="target in the form path.py::qualified_name")
     test_parser.add_argument("--format", choices=("json", "terminal"), default="json")
     test_parser.add_argument("--trace-output", default=".saga/trace.json")
+    test_parser.add_argument(
+        "--show-routine-boundaries",
+        action="store_true",
+        help="expand groups of routine unresolved calls in terminal output",
+    )
+    test_parser.add_argument(
+        "--show-boundary-sites",
+        action="store_true",
+        help="list every source location in repeated boundary groups",
+    )
     args = parser.parse_args(raw_argv)
     if "::" not in args.selector or args.selector.count("::") != 1:
         parser.error("selector must have the form path.py::qualified_name")
@@ -40,7 +60,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.format == "json":
         print(json.dumps(card, indent=2, sort_keys=True))
     else:
-        print(terminal(card))
+        print(
+            terminal(
+                card,
+                show_routine_boundaries=args.show_routine_boundaries,
+                show_boundary_sites=args.show_boundary_sites,
+            )
+        )
     return exit_code
 
 

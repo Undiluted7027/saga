@@ -202,6 +202,24 @@ class LocalCallTests(unittest.TestCase):
         )
         self.assertFalse(self.propagated(match_capture, "return_dependency"))
 
+    def test_non_shadowed_call_inside_comprehension_can_resolve(self):
+        card = self.inspect(
+            "def helper(value):\n"
+            "    return value\n\n"
+            "def caller(values):\n"
+            "    return [helper(value) for value in values]\n"
+        )
+        claims = self.propagated(card, "return_dependency")
+        self.assertEqual(len(claims), 1)
+        self.assertEqual(claims[0]["call_chain"][0]["callee"], "helper")
+        self.assertFalse(
+            any(
+                boundary["kind"] == "unresolved_call"
+                and boundary["target"]["text"] == "helper(...)"
+                for boundary in card["boundaries"]
+            )
+        )
+
     def test_two_calls_keep_distinct_call_sites_without_duplicate_ids(self):
         card = self.inspect(
             "def helper(value):\n"

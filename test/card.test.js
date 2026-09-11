@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { loadCard, targetNameFromLine, validateCard, claimPresentation, hoverLines } = require('../card');
+const { loadCard, targetNameFromLine, validateCard, claimPresentation, boundaryGroups, hoverLines } = require('../card');
 
 test('fixture validates against the evidence-card contract', () => {
   const card = loadCard();
@@ -54,6 +54,37 @@ test('editor exception presentation preserves handler evidence', () => {
   const view = claimPresentation(claim);
   assert.equal(view.summary, claim.statement.text);
   assert.deepEqual(view.handlerSpans, claim.statement.handler_spans);
+});
+
+test('editor groups repeated boundaries without dropping occurrences', () => {
+  const card = loadCard();
+  const first = structuredClone(card.boundaries[1]);
+  first.id = 'repeat-one';
+  const second = structuredClone(first);
+  second.id = 'repeat-two';
+  second.source_span = { ...second.source_span, start_line: 15, end_line: 15 };
+  card.boundaries = [first, second];
+  const before = structuredClone(card.boundaries);
+  const groups = boundaryGroups(card);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].count, 2);
+  assert.deepEqual(groups[0].boundaryIds, ['repeat-one', 'repeat-two']);
+  assert.deepEqual(groups[0].occurrences.map((item) => item.sourceSpan.start_line), [6, 15]);
+  assert.deepEqual(card.boundaries, before);
+});
+
+test('editor keeps different stop reasons and boundary classes separate', () => {
+  const card = loadCard();
+  const external = structuredClone(card.boundaries[1]);
+  const local = { ...structuredClone(external), id: 'local', kind: 'local_call_limit', reason: 'One-hop limit.' };
+  const routine = { ...structuredClone(external), id: 'routine', target: { text: 'len(...)' }, category: 'routine' };
+  card.boundaries = [external, local, routine];
+  const groups = boundaryGroups(card);
+  assert.deepEqual(groups.map((item) => item.boundaryClass), [
+    'external_or_unresolved_call',
+    'module_local',
+    'routine_call'
+  ]);
 });
 
 test('invalid cards produce actionable validation errors', () => {

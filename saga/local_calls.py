@@ -8,7 +8,6 @@ from typing import Literal
 
 from .inspect import _span
 
-
 ResolutionStatus = Literal[
     "resolved",
     "recursive",
@@ -37,6 +36,8 @@ class _FunctionScope(ast.NodeVisitor):
     def __init__(self) -> None:
         self.calls: list[ast.Call] = []
         self.bindings: dict[str, list[ast.AST]] = {}
+        self.comprehension_shadows: list[set[str]] = []
+        self.shadowed_calls: set[int] = set()
 
     def bind(self, name: str, node: ast.AST) -> None:
         """Record one binding in the selected function scope."""
@@ -48,6 +49,11 @@ class _FunctionScope(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         self.calls.append(node)
+        if (
+            isinstance(node.func, ast.Name)
+            and any(node.func.id in names for names in self.comprehension_shadows)
+        ):
+            self.shadowed_calls.add(id(node))
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
@@ -75,15 +81,39 @@ class _FunctionScope(ast.NodeVisitor):
         return
 
     def visit_ListComp(self, node: ast.ListComp) -> None:
-        # Comprehension targets have their own scope. Keeping calls opaque is
-        # safer than mistaking a target name for the module-level function.
-        return
+        """Collect calls while respecting names bound inside the comprehension."""
+        shadowed: set[str] = set()
+        self.comprehension_shadows.append(shadowed)
+        for generator in node.generators:
+            self.visit(generator.iter)
+            shadowed.update(
+                item.id
+                for item in ast.walk(generator.target)
+                if isinstance(item, ast.Name) and isinstance(item.ctx, ast.Store)
+            )
+            for condition in generator.ifs:
+                self.visit(condition)
+        self.visit(node.elt)
+        self.comprehension_shadows.pop()
 
     visit_SetComp = visit_ListComp
     visit_GeneratorExp = visit_ListComp
 
     def visit_DictComp(self, node: ast.DictComp) -> None:
-        return
+        shadowed: set[str] = set()
+        self.comprehension_shadows.append(shadowed)
+        for generator in node.generators:
+            self.visit(generator.iter)
+            shadowed.update(
+                item.id
+                for item in ast.walk(generator.target)
+                if isinstance(item, ast.Name) and isinstance(item.ctx, ast.Store)
+            )
+            for condition in generator.ifs:
+                self.visit(condition)
+        self.visit(node.key)
+        self.visit(node.value)
+        self.comprehension_shadows.pop()
 
     def visit_MatchAs(self, node: ast.MatchAs) -> None:
         if node.name:
@@ -193,6 +223,9 @@ def resolve_local_calls(
     resolutions: list[LocalCallResolution] = []
     for call in scope.calls:
         invoked_as = ast.unparse(call.func)
+        if id(call) in scope.shadowed_calls:
+            resolutions.append(LocalCallResolution(call, "shadowed", invoked_as))
+            continue
         if not isinstance(call.func, ast.Name):
             resolutions.append(LocalCallResolution(call, "external", invoked_as))
             continue

@@ -18,6 +18,13 @@ uncertainty. Unknown exception classes, handler matching, and possible
 context-manager suppression remain visible limits. Saga does not infer implicit
 Python exceptions or exception behavior from unresolved calls.
 
+The JSON card keeps one record per boundary occurrence. Human views group
+occurrences with the same target and stop reason. Important external, dynamic,
+mutation-related, and exception boundaries stay visible; routine unresolved
+calls are collapsed. In terminal output, use `--show-routine-boundaries` to
+expand routine groups and `--show-boundary-sites` to list every location in a
+repeated group.
+
 To run its focused tests:
 
 ```sh

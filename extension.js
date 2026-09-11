@@ -2,7 +2,7 @@ const vscode = require('vscode');
 const cp = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-const { targetNameFromLine, validateCard, claimPresentation, hoverLines } = require('./card');
+const { targetNameFromLine, validateCard, claimPresentation, boundaryGroups, hoverLines } = require('./card');
 
 const staticCardCache = new Map();
 
@@ -95,10 +95,21 @@ function panelHtml(card, panel) {
   }).join('');
   const derivedClaims = renderClaims(card.claims.filter((claim) => claim.evidence.evidence_class !== 'observed'));
   const observedClaims = renderClaims(card.claims.filter((claim) => claim.evidence.evidence_class === 'observed'));
-  const renderBoundary = (boundary) => `<article class="boundary"><h3>${esc(boundary.kind.replaceAll('_', ' '))}</h3><p><strong>${esc(boundary.target.text)}</strong>: ${esc(boundary.reason)}</p>${renderCallChain(boundary.call_chain)}<a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(boundary.source_span))}">source</a></article>`;
-  const importantBoundaries = card.boundaries.filter((boundary) => boundary.category !== 'routine');
-  const routineBoundaries = card.boundaries.filter((boundary) => boundary.category === 'routine');
-  const boundaries = importantBoundaries.map(renderBoundary).join('') + (routineBoundaries.length ? `<details><summary>${routineBoundaries.length} routine unresolved calls</summary>${routineBoundaries.map(renderBoundary).join('')}</details>` : '');
+  const renderBoundaryGroup = (group) => {
+    const sites = group.occurrences.map((occurrence) => `<li><a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(occurrence.sourceSpan))}">${esc(`${occurrence.sourceSpan.path}:${occurrence.sourceSpan.start_line}`)}</a>${renderCallChain(occurrence.callChain)}</li>`).join('');
+    const limitedClaims = group.claimKinds.length ? `<small>Limits: ${esc(group.claimKinds.join(', '))}</small>` : '';
+    const isCall = ['routine_call', 'module_local', 'external_or_unresolved_call'].includes(group.boundaryClass);
+    const siteLabel = `${isCall ? 'call' : 'source'} site${group.count === 1 ? '' : 's'}`;
+    const locations = group.count === 1 ? `<ol>${sites}</ol>` : `<details><summary>${group.count} source locations</summary><ol>${sites}</ol></details>`;
+    return `<article class="boundary"><h3>${esc(group.boundaryClass.replaceAll('_', ' '))} <em>${esc(group.kind.replaceAll('_', ' '))}</em></h3><p><strong>${esc(group.target)}</strong> · ${group.count} ${siteLabel}</p><p>${esc(group.reason)}</p>${limitedClaims}${locations}</article>`;
+  };
+  const groups = boundaryGroups(card);
+  const importantBoundaries = groups.filter((group) => group.category !== 'routine');
+  const routineBoundaries = groups.filter((group) => group.category === 'routine');
+  const routineSites = routineBoundaries.reduce((total, group) => total + group.count, 0);
+  const routineGroupLabel = routineBoundaries.length === 1 ? 'group' : 'groups';
+  const routineSummary = routineBoundaries.length ? `<details><summary>${routineSites} routine unresolved call sites in ${routineBoundaries.length} ${routineGroupLabel}</summary>${routineBoundaries.map(renderBoundaryGroup).join('')}</details>` : '';
+  const boundaries = importantBoundaries.map(renderBoundaryGroup).join('') + routineSummary;
   const diagnostics = card.diagnostics.map((diagnostic) => {
     const source = diagnostic.source_span ? ` <a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(diagnostic.source_span))}">source</a>` : '';
     const chain = renderCallChain(diagnostic.call_chain);

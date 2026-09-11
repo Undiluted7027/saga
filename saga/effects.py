@@ -7,9 +7,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from .guards import BUILTIN_EXCEPTIONS
-from .inspect import Span, _diagnostic, _span
+from .inspect import _diagnostic, _span
 from .presentation import source_expression
-
 
 EFFECT_REGISTRY: dict[str, dict[str, str]] = {
     "pathlib.Path.write_text": {
@@ -18,8 +17,8 @@ EFFECT_REGISTRY: dict[str, dict[str, str]] = {
     },
 }
 PATH_CONSTRUCTORS = {"pathlib.Path"}
-ROUTINE_BUILTINS = {"bool", "dict", "enumerate", "float", "int", "isinstance", "len", "list", "max", "min", "range", "set", "sorted", "str", "sum", "tuple", "zip"}
-ROUTINE_METHODS = {"add", "append", "extend", "get", "items", "keys", "pop", "setdefault", "update", "values"}
+ROUTINE_BUILTINS = {"all", "any", "bool", "dict", "enumerate", "float", "int", "isinstance", "len", "list", "max", "min", "range", "set", "sorted", "str", "sum", "tuple", "zip"}
+ROUTINE_METHODS = {"get", "items", "keys", "values"}
 
 
 @dataclass
