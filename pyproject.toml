@@ -1,0 +1,7 @@
+[project]
+name = "saga"
+version = "0.1.0"
+description = "Saga: evidence-backed Python code intelligence"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
