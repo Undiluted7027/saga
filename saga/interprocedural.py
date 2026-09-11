@@ -128,14 +128,337 @@ def _remap_claim_boundaries(claims: list[dict[str, Any]], boundary_ids: dict[str
         ]
 
 
-def _call_is_in_return(path: str, call: ast.Call, return_claims: list[dict[str, Any]]) -> bool:
-    """Return whether the caller's return slice contains this exact call site."""
+def _assigned_names_containing_call(
+    caller: ast.FunctionDef,
+    call: ast.Call,
+) -> set[str]:
+    """Find names assigned by a statement that lexically contains this call."""
+    names: set[str] = set()
+    for item in ast.walk(caller):
+        if not isinstance(item, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            continue
+        if not any(child is call for child in ast.walk(item)):
+            continue
+        targets = item.targets if isinstance(item, ast.Assign) else [item.target]
+        for target in targets:
+            names.update(
+                child.id
+                for child in ast.walk(target)
+                if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store)
+            )
+    return names
+
+
+def _call_is_in_return(
+    path: str,
+    caller: ast.FunctionDef,
+    call: ast.Call,
+    return_claims: list[dict[str, Any]],
+) -> bool:
+    """Return whether a call may supply a value used by one caller return."""
     call_span = _span_key(_span(path, call).as_dict())
-    return any(
+    if any(
         _span_key(item["source_span"]) == call_span
         for claim in return_claims
         for item in claim["statement"].get("calls", [])
+    ):
+        return True
+
+    # Unsupported compound statements are currently represented as one coarse
+    # CFG node. Preserve a conservative connection when a nested call assigns a
+    # name that the supported part of the return slice reads or defines.
+    assigned = _assigned_names_containing_call(caller, call)
+    return bool(assigned) and any(
+        assigned
+        & {
+            name
+            for dependency in claim["statement"].get("dependencies", [])
+            for name in [*dependency.get("reads", []), *dependency.get("names", [])]
+        }
+        for claim in return_claims
     )
+
+
+def _caller_parameters(node: ast.FunctionDef) -> set[str]:
+    """Return every parameter name available at the caller boundary."""
+    parameters = {
+        item.arg
+        for item in [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
+    }
+    if node.args.vararg:
+        parameters.add(node.args.vararg.arg)
+    if node.args.kwarg:
+        parameters.add(node.args.kwarg.arg)
+    return parameters
+
+
+def _caller_inputs_for_argument(
+    caller: ast.FunctionDef,
+    call: ast.Call,
+    argument: ast.AST,
+    caller_parameters: set[str],
+) -> list[str]:
+    """Trace a call argument through direct inputs and enclosing loop/control inputs."""
+    inputs = {
+        item.id
+        for item in ast.walk(argument)
+        if isinstance(item, ast.Name)
+        and isinstance(item.ctx, ast.Load)
+        and item.id in caller_parameters
+    }
+    argument_names = {
+        item.id
+        for item in ast.walk(argument)
+        if isinstance(item, ast.Name) and isinstance(item.ctx, ast.Load)
+    }
+    for container in ast.walk(caller):
+        if not any(item is call for item in ast.walk(container)):
+            continue
+        control: ast.AST | None = None
+        if isinstance(container, (ast.For, ast.AsyncFor)):
+            target_names = {
+                item.id
+                for item in ast.walk(container.target)
+                if isinstance(item, ast.Name) and isinstance(item.ctx, ast.Store)
+            }
+            if argument_names & target_names:
+                control = container.iter
+        elif isinstance(container, (ast.If, ast.While)):
+            control = container.test
+        if control is not None:
+            inputs.update(
+                item.id
+                for item in ast.walk(control)
+                if isinstance(item, ast.Name)
+                and isinstance(item.ctx, ast.Load)
+                and item.id in caller_parameters
+            )
+    return sorted(inputs)
+
+
+def _argument_bindings(
+    resolution: LocalCallResolution,
+) -> tuple[dict[str, tuple[ast.AST, str]], str | None]:
+    """Bind a supported call to callee parameters or explain why that is unsafe."""
+    assert resolution.callee is not None
+    call = resolution.call
+    callee = resolution.callee
+    if any(isinstance(argument, ast.Starred) for argument in call.args):
+        return {}, "Saga cannot map starred positional arguments to callee parameters."
+    if any(keyword.arg is None for keyword in call.keywords):
+        return {}, "Saga cannot map expanded keyword arguments to callee parameters."
+
+    positional = [*callee.args.posonlyargs, *callee.args.args]
+    if len(call.args) > len(positional):
+        return {}, "Saga cannot map extra positional arguments through a variadic parameter."
+
+    bindings: dict[str, tuple[ast.AST, str]] = {}
+    for parameter, argument in zip(positional, call.args):
+        bindings[parameter.arg] = (argument, "argument")
+
+    positional_only = {item.arg for item in callee.args.posonlyargs}
+    keyword_parameters = {
+        item.arg for item in [*callee.args.args, *callee.args.kwonlyargs]
+    }
+    for keyword in call.keywords:
+        assert keyword.arg is not None
+        if keyword.arg in positional_only:
+            return {}, f"Saga cannot bind positional-only parameter '{keyword.arg}' by keyword."
+        if keyword.arg not in keyword_parameters:
+            return {}, f"Saga cannot map keyword '{keyword.arg}' to a declared callee parameter."
+        if keyword.arg in bindings:
+            return {}, f"Saga found more than one argument for callee parameter '{keyword.arg}'."
+        bindings[keyword.arg] = (keyword.value, "argument")
+
+    defaults_start = len(positional) - len(callee.args.defaults)
+    for index, parameter in enumerate(positional):
+        if parameter.arg not in bindings and index >= defaults_start:
+            bindings[parameter.arg] = (
+                callee.args.defaults[index - defaults_start],
+                "default",
+            )
+    for parameter, default in zip(callee.args.kwonlyargs, callee.args.kw_defaults):
+        if parameter.arg not in bindings and default is not None:
+            bindings[parameter.arg] = (default, "default")
+    return bindings, None
+
+
+def _binding_boundary(
+    path: str,
+    caller: ast.FunctionDef,
+    resolution: LocalCallResolution,
+    reason: str,
+) -> dict[str, Any]:
+    """Record an argument mapping that Saga refused to guess."""
+    return {
+        "id": f"local-binding-{resolution.call.lineno}-{resolution.call.col_offset}",
+        "kind": "unsupported_semantics",
+        "target": {"text": f"{resolution.invoked_as}(...) argument binding"},
+        "reason": reason,
+        "category": "important",
+        "source_span": _span(path, resolution.call).as_dict(),
+        "call_chain": [call_record(path, caller, resolution)],
+    }
+
+
+def _compose_return_dependencies(
+    path: str,
+    caller: ast.FunctionDef,
+    resolution: LocalCallResolution,
+    caller_returns: list[dict[str, Any]],
+    callee_returns: list[dict[str, Any]],
+    boundary_map: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Carry supported callee inputs into each caller return that uses the call."""
+    relevant = [
+        claim
+        for claim in caller_returns
+        if _call_is_in_return(path, caller, resolution.call, [claim])
+    ]
+    if not relevant or not callee_returns:
+        return []
+
+    required_inputs = {
+        name
+        for claim in callee_returns
+        for name in claim["statement"].get("inputs", [])
+    }
+    if not required_inputs:
+        return []
+
+    bindings, refusal = _argument_bindings(resolution)
+    if refusal:
+        boundary = _binding_boundary(path, caller, resolution, refusal)
+        for claim in relevant:
+            if boundary["id"] not in claim["boundary_ids"]:
+                claim["boundary_ids"].append(boundary["id"])
+        return [boundary]
+
+    assert resolution.callee is not None
+    caller_parameters = _caller_parameters(caller)
+    callee_vararg = resolution.callee.args.vararg
+    callee_kwarg = resolution.callee.args.kwarg
+    unsupported_parameters = {
+        item.arg for item in (callee_vararg, callee_kwarg) if item is not None
+    }
+    unresolved = sorted(required_inputs & unsupported_parameters)
+    if unresolved:
+        reason = (
+            "Saga cannot map return-relevant variadic callee parameter(s): "
+            + ", ".join(unresolved)
+            + "."
+        )
+        boundary = _binding_boundary(path, caller, resolution, reason)
+        for claim in relevant:
+            if boundary["id"] not in claim["boundary_ids"]:
+                claim["boundary_ids"].append(boundary["id"])
+        return [boundary]
+
+    call_link = call_record(path, caller, resolution)
+    callee_return_spans = [
+        claim["evidence"]["detail"]["return_source_span"]
+        for claim in callee_returns
+    ]
+    limiting_boundaries = sorted({
+        boundary_map[boundary_id]
+        for claim in callee_returns
+        for boundary_id in claim["boundary_ids"]
+        if boundary_id in boundary_map
+    })
+    composed: list[dict[str, Any]] = []
+    for parameter in sorted(required_inputs):
+        binding = bindings.get(parameter)
+        if binding is None:
+            reason = f"Saga could not bind return-relevant callee parameter '{parameter}'."
+            boundary = _binding_boundary(path, caller, resolution, reason)
+            for claim in relevant:
+                if boundary["id"] not in claim["boundary_ids"]:
+                    claim["boundary_ids"].append(boundary["id"])
+            return [boundary]
+        argument, origin = binding
+        caller_inputs = (
+            _caller_inputs_for_argument(
+                caller,
+                resolution.call,
+                argument,
+                caller_parameters,
+            )
+            if origin == "argument"
+            else []
+        )
+        composed.append({
+            "callee_parameter": parameter,
+            "caller_argument": ast.unparse(argument),
+            "binding_origin": origin,
+            "caller_inputs": caller_inputs,
+            "argument_span": _span(path, argument).as_dict(),
+            "callee_return_spans": callee_return_spans,
+            "boundary_ids": limiting_boundaries,
+            "call_chain": [call_link],
+        })
+
+    for claim in relevant:
+        statement = claim["statement"]
+        existing = statement.setdefault("local_call_dependencies", [])
+        existing_keys = {
+            (
+                item["callee_parameter"],
+                _span_key(item["call_chain"][0]["call_site"]),
+            )
+            for item in existing
+        }
+        for item in composed:
+            key = (
+                item["callee_parameter"],
+                _span_key(item["call_chain"][0]["call_site"]),
+            )
+            if key not in existing_keys:
+                existing.append(item)
+                existing_keys.add(key)
+        statement["inputs"] = sorted({
+            *statement.get("inputs", []),
+            *(name for item in composed for name in item["caller_inputs"]),
+        })
+        claim["boundary_ids"] = sorted({
+            *claim["boundary_ids"],
+            *limiting_boundaries,
+        })
+        call_detail = {
+            "text": f"{resolution.invoked_as}(...)",
+            "source_span": call_link["call_site"],
+        }
+        if not any(
+            _span_key(item["source_span"]) == _span_key(call_detail["source_span"])
+            for item in statement.setdefault("calls", [])
+        ):
+            statement["calls"].append(call_detail)
+        dependency_detail = {
+            "kind": "local_call_return",
+            "names": sorted(_assigned_names_containing_call(caller, resolution.call)),
+            "reads": sorted({
+                name for item in composed for name in item["caller_inputs"]
+            }),
+            "calls": [call_detail],
+            "source_span": call_link["call_site"],
+        }
+        if not any(
+            item.get("kind") == "local_call_return"
+            and _span_key(item["source_span"]) == _span_key(call_link["call_site"])
+            for item in statement.setdefault("dependencies", [])
+        ):
+            statement["dependencies"].append(dependency_detail)
+        claim["source_spans"] = _unique_spans([
+            *claim["source_spans"],
+            call_link["call_site"],
+            call_link["callee_span"],
+            *(span for item in composed for span in item["callee_return_spans"]),
+        ])
+        assumption = {
+            "text": "Return dependencies from this module-local call use one-hop argument binding."
+        }
+        if assumption not in claim["assumptions"]:
+            claim["assumptions"].append(assumption)
+    return []
 
 
 def _propagated_text(invoked_as: str, claim: dict[str, Any]) -> str:
@@ -287,8 +610,21 @@ def analyze_one_hop(path: str, tree: ast.Module, node: ast.FunctionDef) -> Funct
             if key not in propagated_keys:
                 propagated_keys.add(key)
                 evidence.boundaries.append(propagated)
+        binding_boundaries = _compose_return_dependencies(
+            path,
+            node,
+            resolution,
+            caller_returns,
+            [
+                claim
+                for claim in callee_evidence.claims
+                if claim["kind"] == "return_dependency"
+            ],
+            boundary_map,
+        )
+        evidence.boundaries.extend(binding_boundaries)
         for claim in callee_evidence.claims:
-            if claim["kind"] == "return_dependency" and not _call_is_in_return(path, resolution.call, caller_returns):
+            if claim["kind"] == "return_dependency" and not _call_is_in_return(path, node, resolution.call, caller_returns):
                 continue
             if claim["kind"] not in {"return_dependency", "attempted_write", "known_effect", "explicit_exception"}:
                 continue

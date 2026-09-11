@@ -98,6 +98,18 @@ def terminal(
             lines.append(f"    May use local values: {', '.join(statement['definitions'])}")
         if statement.get("calls"):
             lines.append(f"    May use calls: {', '.join(call['text'] for call in statement['calls'])}")
+        for dependency in statement.get("local_call_dependencies", []):
+            caller_inputs = (
+                f"; caller inputs: {', '.join(dependency['caller_inputs'])}"
+                if dependency["caller_inputs"]
+                else ""
+            )
+            lines.append(
+                "    Through local call: "
+                f"{dependency['callee_parameter']} = {dependency['caller_argument']}"
+                f" ({dependency['binding_origin']}{caller_inputs})"
+            )
+            _local_call_chain(lines, dependency["call_chain"])
         lines.append(f"    Method: {claim['evidence']['method']}")
         if claim["boundary_ids"]:
             lines.append(f"    Limited by: {', '.join(claim['boundary_ids'])}")

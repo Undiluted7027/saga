@@ -39,9 +39,21 @@ class LocalCallTests(unittest.TestCase):
         self.assertEqual(claims[0]["source_spans"][0], link["call_site"])
         self.assertEqual(claims[0]["source_spans"][1], link["callee_span"])
         self.assertFalse([item for item in card["boundaries"] if item["source_span"] == link["call_site"]])
+        caller_claim = next(
+            claim
+            for claim in card["claims"]
+            if claim["kind"] == "return_dependency" and not claim.get("call_chain")
+        )
+        self.assertEqual(caller_claim["statement"]["inputs"], ["raw"])
+        dependency = caller_claim["statement"]["local_call_dependencies"][0]
+        self.assertEqual(dependency["callee_parameter"], "value")
+        self.assertEqual(dependency["caller_argument"], "raw")
+        self.assertEqual(dependency["caller_inputs"], ["raw"])
+        self.assertEqual(dependency["call_chain"][0], link)
         rendered = terminal(card)
         self.assertIn("Local call: caller -> helper", rendered)
         self.assertIn("Arguments: value = raw", rendered)
+        self.assertIn("Through local call: value = raw", rendered)
 
     def test_helper_propagates_write_effect_exception_and_boundary(self):
         card = self.inspect(
@@ -233,6 +245,121 @@ class LocalCallTests(unittest.TestCase):
         self.assertEqual(len(claims), 2)
         self.assertEqual(len({claim["id"] for claim in claims}), 2)
         self.assertEqual({claim["call_chain"][0]["call_site"]["start_line"] for claim in claims}, {5, 6})
+        caller_claim = next(
+            claim
+            for claim in card["claims"]
+            if claim["kind"] == "return_dependency" and not claim.get("call_chain")
+        )
+        self.assertEqual(caller_claim["statement"]["inputs"], ["first", "second"])
+        self.assertEqual(
+            len(caller_claim["statement"]["local_call_dependencies"]),
+            2,
+        )
+
+    def test_helper_dependencies_follow_keyword_renaming_and_tuple_assignment(self):
+        card = self.inspect(
+            "def helper(price, rate):\n"
+            "    return price, price * rate\n\n"
+            "def caller(catalog, tax_rate):\n"
+            "    price, taxed = helper(rate=tax_rate, price=catalog['sku'])\n"
+            "    return taxed\n"
+        )
+        caller_claim = next(
+            claim
+            for claim in card["claims"]
+            if claim["kind"] == "return_dependency" and not claim.get("call_chain")
+        )
+        self.assertEqual(caller_claim["statement"]["inputs"], ["catalog", "tax_rate"])
+        dependencies = caller_claim["statement"]["local_call_dependencies"]
+        self.assertEqual(
+            {
+                item["callee_parameter"]: (
+                    item["caller_argument"],
+                    item["caller_inputs"],
+                )
+                for item in dependencies
+            },
+            {
+                "price": ("catalog['sku']", ["catalog"]),
+                "rate": ("tax_rate", ["tax_rate"]),
+            },
+        )
+
+    def test_handled_helper_exception_does_not_block_return_composition(self):
+        card = self.inspect(
+            "def helper(catalog, sku):\n"
+            "    if sku not in catalog:\n"
+            "        raise KeyError(sku)\n"
+            "    return catalog[sku]\n\n"
+            "def caller(records, catalog):\n"
+            "    total = 0\n"
+            "    for sku in records:\n"
+            "        try:\n"
+            "            total += helper(catalog, sku)\n"
+            "        except KeyError:\n"
+            "            continue\n"
+            "    return total\n"
+        )
+        caller_claim = next(
+            claim
+            for claim in card["claims"]
+            if claim["kind"] == "return_dependency" and not claim.get("call_chain")
+        )
+        self.assertEqual(caller_claim["statement"]["inputs"], ["catalog", "records"])
+        self.assertFalse(self.propagated(card, "explicit_exception"))
+        dependencies = caller_claim["statement"]["local_call_dependencies"]
+        self.assertEqual(
+            {
+                item["callee_parameter"]: item["caller_inputs"]
+                for item in dependencies
+            },
+            {"catalog": ["catalog"], "sku": ["records"]},
+        )
+        self.assertIn("helper(...)", [item["text"] for item in caller_claim["statement"]["calls"]])
+
+    def test_starred_argument_binding_is_an_attached_boundary(self):
+        card = self.inspect(
+            "def helper(value):\n"
+            "    return value\n\n"
+            "def caller(values):\n"
+            "    return helper(*values)\n"
+        )
+        caller_claim = next(
+            claim
+            for claim in card["claims"]
+            if claim["kind"] == "return_dependency" and not claim.get("call_chain")
+        )
+        boundary = next(
+            item
+            for item in card["boundaries"]
+            if item["id"].startswith("local-binding-")
+        )
+        self.assertEqual(boundary["kind"], "unsupported_semantics")
+        self.assertIn("starred positional", boundary["reason"])
+        self.assertIn(boundary["id"], caller_claim["boundary_ids"])
+        self.assertNotIn("local_call_dependencies", caller_claim["statement"])
+
+    def test_callee_return_boundary_limits_the_composed_caller_return(self):
+        card = self.inspect(
+            "def helper(value):\n"
+            "    return external(value)\n\n"
+            "def caller(raw):\n"
+            "    return helper(raw)\n"
+        )
+        caller_claim = next(
+            claim
+            for claim in card["claims"]
+            if claim["kind"] == "return_dependency" and not claim.get("call_chain")
+        )
+        dependency = caller_claim["statement"]["local_call_dependencies"][0]
+        self.assertEqual(len(dependency["boundary_ids"]), 1)
+        self.assertIn(dependency["boundary_ids"][0], caller_claim["boundary_ids"])
+        boundary = next(
+            item
+            for item in card["boundaries"]
+            if item["id"] == dependency["boundary_ids"][0]
+        )
+        self.assertEqual(boundary["target"]["text"], "external(...)")
 
     def test_callee_diagnostic_keeps_the_call_that_exposed_it(self):
         card = self.inspect(

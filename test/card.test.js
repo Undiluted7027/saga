@@ -9,6 +9,12 @@ test('fixture validates against the evidence-card contract', () => {
   for (const claim of card.claims) assert.ok(claim.source_spans.length, claim.id);
 });
 
+test('the evidence-card JSON schema is parseable', () => {
+  const schemaPath = require('node:path').join(__dirname, '..', 'schema', 'evidence-card.schema.json');
+  const schema = JSON.parse(require('node:fs').readFileSync(schemaPath, 'utf8'));
+  assert.equal(schema.$defs.claim.type, 'object');
+});
+
 test('target selection uses the function name rather than the word under the cursor', () => {
   assert.equal(targetNameFromLine('def process_order(order):'), 'process_order');
   assert.equal(targetNameFromLine('async def process_order(order):'), 'process_order');
@@ -46,6 +52,22 @@ test('editor claim presentation preserves a local call chain', () => {
   const view = claimPresentation(claim);
   assert.equal(view.callChain[0].callee, 'lookup_tax');
   assert.equal(view.callChain[0].argument_bindings[0].parameter, 'tax_rate');
+});
+
+test('editor claim presentation preserves composed local return dependencies', () => {
+  const claim = structuredClone(loadCard().claims.find((item) => item.kind === 'return_dependency'));
+  claim.statement.local_call_dependencies = [{
+    callee_parameter: 'price',
+    caller_argument: 'catalog[sku]',
+    binding_origin: 'argument',
+    caller_inputs: ['catalog'],
+    argument_span: claim.source_spans[0],
+    callee_return_spans: [claim.source_spans[1]],
+    boundary_ids: [],
+    call_chain: []
+  }];
+  const view = claimPresentation(claim);
+  assert.deepEqual(view.localCallDependencies, claim.statement.local_call_dependencies);
 });
 
 test('editor exception presentation preserves handler evidence', () => {
