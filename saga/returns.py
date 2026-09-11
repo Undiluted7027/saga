@@ -8,6 +8,7 @@ from typing import Any
 
 from .guards import BUILTIN_EXCEPTIONS
 from .inspect import Span, _diagnostic, _span
+from .presentation import condition_is_compound, describe_condition, source_expression
 
 
 @dataclass
@@ -18,7 +19,7 @@ class CFGNode:
     statement: ast.stmt
     reads: set[str]
     definitions: set[str]
-    controls: list[int] = field(default_factory=list)
+    controls: list[tuple[int, bool | None]] = field(default_factory=list)
     successors: set[int] = field(default_factory=set)
     predecessors: set[int] = field(default_factory=set)
 
@@ -53,6 +54,10 @@ def _definition_names(node: ast.AST) -> set[str]:
 
 def _node_reads(node: ast.stmt) -> set[str]:
     """Collect reads while excluding assignment target names."""
+    if isinstance(node, (ast.If, ast.Assert)):
+        return _read_names(node.test)
+    if isinstance(node, (ast.For, ast.AsyncFor)):
+        return _read_names(node.iter)
     reads = _read_names(node)
     if isinstance(node, ast.Assign):
         for target in node.targets:
@@ -90,7 +95,7 @@ class _CFGBuilder:
         self.diagnostics: list[dict[str, Any]] = []
         self.gates_next: dict[int, bool] = {}
 
-    def node(self, statement: ast.stmt, controls: list[int]) -> int:
+    def node(self, statement: ast.stmt, controls: list[tuple[int, bool | None]]) -> int:
         """Create one CFG node with lexical reads, definitions, and controllers."""
         node_id = self.next_id
         self.next_id += 1
@@ -103,7 +108,7 @@ class _CFGBuilder:
         self.nodes[source].successors.add(target)
         self.nodes[target].predecessors.add(source)
 
-    def block(self, statements: list[ast.stmt], controls: list[int]) -> tuple[int | None, set[int]]:
+    def block(self, statements: list[ast.stmt], controls: list[tuple[int, bool | None]]) -> tuple[int | None, set[int]]:
         """Build a block and return its entry node and fall-through exits."""
         first: int | None = None
         exits: set[int] = set()
@@ -115,16 +120,18 @@ class _CFGBuilder:
             for previous in exits:
                 self.edge(previous, entry)
             exits = statement_exits
-            if isinstance(statement, ast.Assert) or self.gates_next.get(entry, False):
-                active_controls.append(entry)
+            if isinstance(statement, ast.Assert):
+                active_controls.append((entry, True))
+            elif entry in self.gates_next:
+                active_controls.append((entry, self.gates_next[entry]))
         return first, exits
 
-    def statement(self, statement: ast.stmt, controls: list[int]) -> tuple[int, set[int]]:
+    def statement(self, statement: ast.stmt, controls: list[tuple[int, bool | None]]) -> tuple[int, set[int]]:
         """Build one statement, including branch and loop edges."""
         current = self.node(statement, controls)
         if isinstance(statement, ast.If):
-            body_first, body_exits = self.block(statement.body, [*controls, current])
-            else_first, else_exits = self.block(statement.orelse, [*controls, current])
+            body_first, body_exits = self.block(statement.body, [*controls, (current, True)])
+            else_first, else_exits = self.block(statement.orelse, [*controls, (current, False)])
             body_terminates = body_first is not None and not body_exits
             else_terminates = else_first is not None and not else_exits
             if body_first is not None:
@@ -135,11 +142,12 @@ class _CFGBuilder:
                 self.edge(current, else_first)
             else:
                 else_exits = {current}
-            self.gates_next[current] = body_terminates != else_terminates
+            if body_terminates != else_terminates:
+                self.gates_next[current] = else_terminates
             return current, body_exits | else_exits
         if isinstance(statement, ast.For):
-            body_first, body_exits = self.block(statement.body, [*controls, current])
-            else_first, else_exits = self.block(statement.orelse, [*controls, current])
+            body_first, body_exits = self.block(statement.body, [*controls, (current, None)])
+            else_first, else_exits = self.block(statement.orelse, [*controls, (current, None)])
             if body_first is not None:
                 self.edge(current, body_first)
                 for exit_node in body_exits:
@@ -200,7 +208,7 @@ def _call_details(path: str, node: ast.AST) -> list[dict[str, Any]]:
     return calls
 
 
-def _claim(path: str, return_node: CFGNode, included: set[int], builder: _CFGBuilder, incoming: dict[int, dict[str, set[int]]], boundaries: list[dict[str, Any]], entry_spans: list[dict[str, Any]], parameter_names: set[str]) -> dict[str, Any]:
+def _claim(path: str, return_node: CFGNode, included: set[int], builder: _CFGBuilder, boundaries: list[dict[str, Any]], parameter_names: set[str]) -> dict[str, Any]:
     """Build one source-linked may-affect claim for a single return statement."""
     ordered = sorted(included, key=lambda item: (builder.nodes[item].statement.lineno, builder.nodes[item].statement.col_offset))
     source_spans = [_span(path, builder.nodes[item].statement).as_dict() for item in ordered]
@@ -232,21 +240,44 @@ def _claim(path: str, return_node: CFGNode, included: set[int], builder: _CFGBui
         if any(_contains(span, boundary["source_span"]) for span in source_spans):
             boundary_ids.append(boundary["id"])
     inputs = sorted(reads & parameter_names)
-    summary_parts = []
-    if inputs:
-        summary_parts.append("inputs: " + ", ".join(inputs))
-    if definitions:
-        summary_parts.append("definitions: " + ", ".join(sorted(definitions)))
-    if unique_calls:
-        summary_parts.append("calls: " + ", ".join(call["text"] for call in unique_calls))
-    summary = "Return may depend on " + "; ".join(summary_parts) + "." if summary_parts else "Return has no named inputs, definitions, or calls in the slice."
+    path_conditions = []
+    compound_conditions: list[bool] = []
+    path_assumptions: list[dict[str, str]] = []
+    seen_conditions: set[tuple[int, bool]] = set()
+    for control_id, expected in return_node.controls:
+        control = builder.nodes[control_id].statement
+        if expected is None or not isinstance(control, (ast.If, ast.Assert)):
+            continue
+        key = (control_id, expected)
+        if key in seen_conditions:
+            continue
+        seen_conditions.add(key)
+        test = control.test
+        path_conditions.append({
+            "text": describe_condition(test, expected),
+            "expected": expected,
+            "source_text": source_expression(test),
+            "source_span": _span(path, test).as_dict(),
+        })
+        compound_conditions.append(condition_is_compound(test))
+        if isinstance(control, ast.Assert):
+            path_assumptions.append({"text": "This return path assumes __debug__ is true; Python may remove the assertion under optimization."})
+        if any(isinstance(item, ast.Compare) for item in ast.walk(test)):
+            path_assumptions.append({"text": "Comparison path wording follows the modeled Python semantics; overloaded comparisons are not resolved."})
+    returned = source_expression(return_node.statement.value)
+    rendered_conditions = [
+        f"({item['text']})" if len(path_conditions) > 1 and compound else item["text"]
+        for item, compound in zip(path_conditions, compound_conditions)
+    ]
+    path_suffix = " when " + " and ".join(rendered_conditions) if rendered_conditions else ""
+    summary = f"Returns {returned}{path_suffix}."
     return {
         "id": f"return-{return_node.statement.lineno}-{return_node.statement.col_offset}",
         "kind": "return_dependency",
-        "statement": {"text": summary, "type": "return_dependency", "inputs": inputs, "definitions": sorted(definitions), "calls": unique_calls, "dependencies": dependencies},
+        "statement": {"text": summary, "type": "return_dependency", "source_text": returned, "return_expression": returned, "path_conditions": path_conditions, "inputs": inputs, "definitions": sorted(definitions), "calls": unique_calls, "dependencies": dependencies},
         "evidence": {"method": "intraprocedural_may_affect", "evidence_class": "derived", "detail": {"return_source_span": _span(path, return_node.statement).as_dict()}},
         "source_spans": source_spans,
-        "assumptions": [{"text": "The slice is intraprocedural and conservative; included statements may not affect every execution."}],
+        "assumptions": [{"text": "The slice is intraprocedural and conservative; included statements may not affect every execution."}, *path_assumptions],
         "boundary_ids": boundary_ids,
     }
 
@@ -283,7 +314,7 @@ def analyze_returns(path: str, node: ast.FunctionDef, boundaries: list[dict[str,
         while worklist:
             current = worklist.pop()
             current_node = builder.nodes[current]
-            for control in current_node.controls:
+            for control, _ in current_node.controls:
                 if control not in included:
                     included.add(control)
                     worklist.append(control)
@@ -296,5 +327,5 @@ def analyze_returns(path: str, node: ast.FunctionDef, boundaries: list[dict[str,
                     if definition not in included:
                         included.add(definition)
                         worklist.append(definition)
-        claims.append(_claim(path, return_node, included, builder, incoming, boundaries, entry_spans, parameter_names))
+        claims.append(_claim(path, return_node, included, builder, boundaries, parameter_names))
     return ReturnResult(claims, builder.diagnostics)

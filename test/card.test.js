@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { loadCard, targetNameFromLine, validateCard, hoverLines } = require('../card');
+const { loadCard, targetNameFromLine, validateCard, claimPresentation, hoverLines } = require('../card');
 
 test('fixture validates against the evidence-card contract', () => {
   const card = loadCard();
@@ -27,6 +27,17 @@ test('hover stays compact and leaves details for the panel', () => {
   assert.match(lines.at(-1), /Open detailed evidence card/);
   assert.ok(lines.some((line) => line.includes('Observed')));
   assert.ok(lines.some((line) => line.includes('Boundary')));
+  assert.ok(lines.some((line) => line.includes('order.items is falsy')));
+});
+
+test('editor claim presentation keeps wording and supporting evidence together', () => {
+  const claim = loadCard().claims.find((item) => item.kind === 'rejected_input');
+  const view = claimPresentation(claim);
+  assert.equal(view.summary, 'Rejects input when order.items is falsy.');
+  assert.equal(view.sourceText, 'not order.items');
+  assert.equal(view.evidenceClass, 'derived');
+  assert.equal(view.method, 'entry_guard');
+  assert.deepEqual(view.sourceSpans, claim.source_spans);
 });
 
 test('invalid cards produce actionable validation errors', () => {

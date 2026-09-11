@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 
@@ -25,12 +24,19 @@ def terminal(card: dict[str, Any]) -> str:
         statement = claim["statement"]
         label = statement.get("type", claim["kind"])
         lines.append(f"  Claim [{label}; {claim['evidence']['evidence_class']}]: {statement['text']}")
-        if "condition" in statement:
-            lines.append(f"    Condition: {json.dumps(statement['condition'], sort_keys=True)}")
-        if "dependencies" in statement:
-            for dependency in statement["dependencies"]:
-                span = dependency["source_span"]
-                lines.append(f"    Dependency [{dependency['kind']}] at {span['path']}:{span['start_line']}")
+        if statement.get("source_text"):
+            lines.append(f"    Source syntax: {statement['source_text']}")
+        if statement.get("condition_source_text"):
+            lines.append(f"    Condition syntax: {statement['condition_source_text']}")
+        if statement.get("inputs"):
+            lines.append(f"    May use inputs: {', '.join(statement['inputs'])}")
+        if statement.get("definitions"):
+            lines.append(f"    May use local values: {', '.join(statement['definitions'])}")
+        if statement.get("calls"):
+            lines.append(f"    May use calls: {', '.join(call['text'] for call in statement['calls'])}")
+        lines.append(f"    Method: {claim['evidence']['method']}")
+        if claim["boundary_ids"]:
+            lines.append(f"    Limited by: {', '.join(claim['boundary_ids'])}")
         if claim["evidence"]["evidence_class"] == "observed":
             detail = claim["evidence"].get("detail", {})
             lines.append(f"    Support: {detail.get('support', 0)} distinct inputs")

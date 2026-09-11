@@ -58,6 +58,14 @@ Use functions from Saga and other Python code, not examples written for the demo
 
 External evaluation can start when the card answers those questions outside the fixture directory without burying the answer under unresolved boundaries.
 
+### Readable claims (#13)
+
+Dogfooded on 2026-09-11 against `_compact_domain` in `saga/render.py`, `_resolve` in `saga/effects.py`, and `describe_condition` in `saga/presentation.py`.
+
+The card now names the expression returned on each path and states the conditions needed to reach it. Guards describe truthiness and simple comparisons instead of dumping the serialized condition. The CLI and editor use the same claim text, and the detail view keeps the source expression, analysis method, assumptions, source links, and limiting boundaries.
+
+This made multi-return functions easier to follow. It also made the next problems harder to ignore. Routine calls still create long boundary lists, recursive and module-local helpers remain opaque, and a large dependency slice is still dense when expanded. Those belong to #12 and #11. They are not wording problems.
+
 ## Later developer evaluation protocol
 
 Run with at least five developers who did not write Saga. Use two comparable

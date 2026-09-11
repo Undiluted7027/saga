@@ -8,12 +8,13 @@ from typing import Any
 
 from .guards import BUILTIN_EXCEPTIONS
 from .inspect import Span, _diagnostic, _span
+from .presentation import source_expression
 
 
 EFFECT_REGISTRY: dict[str, dict[str, str]] = {
     "pathlib.Path.write_text": {
         "kind": "filesystem_write",
-        "description": "writes text to the filesystem",
+        "description": "write text to the filesystem",
     },
 }
 PATH_CONSTRUCTORS = {"pathlib.Path"}
@@ -128,7 +129,8 @@ class _EffectScanner(ast.NodeVisitor):
             return
         if isinstance(target, ast.Name) and target.id not in self.globals:
             return
-        claim = _claim(self.path, target, {"type": "attempted_write", "target": structured}, f"Attempts to write {ast.unparse(target)}.")
+        target_text = source_expression(target)
+        claim = _claim(self.path, target, {"type": "attempted_write", "target": structured, "source_text": target_text}, f"Attempts to write to {target_text}.")
         if isinstance(target, (ast.Attribute, ast.Subscript)):
             boundary = _boundary(self.path, target, "assignment_hooks", ast.unparse(target), "The assignment may invoke a descriptor, __setattr__, or __setitem__ implementation.")
             self.result.boundaries.append(boundary)
@@ -184,7 +186,7 @@ class _EffectScanner(ast.NodeVisitor):
         modeled_exception = isinstance(node.func, ast.Name) and node.func.id in BUILTIN_EXCEPTIONS
         if canonical in EFFECT_REGISTRY:
             effect = EFFECT_REGISTRY[canonical]
-            self.result.claims.append(_claim(self.path, node, {"type": "known_effect", "effect": {"kind": effect["kind"], "callee": canonical}}, f"May {effect['description']} via {canonical}."))
+            self.result.claims.append(_claim(self.path, node, {"type": "known_effect", "effect": {"kind": effect["kind"], "callee": canonical}, "source_text": source_expression(node)}, f"May {effect['description']} through {canonical}(...)."))
         elif not modeled_exception:
             boundary = _boundary(self.path, node, "unresolved_call", ast.unparse(node.func) + "(...)", "The callee is not in the effect registry and may affect behavior.", _call_category(node))
             self.result.boundaries.append(boundary)

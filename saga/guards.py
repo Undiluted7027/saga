@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .inspect import Span, _diagnostic, _span
+from .presentation import describe_condition, source_expression
 
 
 BUILTIN_EXCEPTIONS = {
@@ -176,7 +177,8 @@ def analyze_guards(path: str, node: ast.FunctionDef) -> tuple[list[dict[str, Any
             boundaries.extend(condition.boundaries)
             boundary_ids = [item["id"] for item in condition.boundaries]
             assumptions = [{"text": "The assertion depends on __debug__ being true; Python may remove it under optimization."}, *condition.assumptions]
-            claims.append(_claim(f"assertion-{statement.lineno}", "rejected_input", "Requires the assertion condition to hold.", {"type": "assertion", "condition": condition.expression}, [_span(path, statement.test), _span(path, statement)], assumptions, boundary_ids))
+            description = describe_condition(statement.test)
+            claims.append(_claim(f"assertion-{statement.lineno}", "rejected_input", f"Requires {description}.", {"type": "assertion", "condition": condition.expression, "source_text": source_expression(statement.test)}, [_span(path, statement.test), _span(path, statement)], assumptions, boundary_ids))
             continue
         if isinstance(statement, ast.If) and not statement.orelse and len(statement.body) == 1 and isinstance(statement.body[0], ast.Raise):
             raised = statement.body[0]
@@ -192,15 +194,17 @@ def analyze_guards(path: str, node: ast.FunctionDef) -> tuple[list[dict[str, Any
             boundary_ids = [item["id"] for item in condition.boundaries]
             assumptions = condition.assumptions
             exit_statement = {"kind": "raise", "exception": exception}
-            claims.append(_claim(f"guard-{statement.lineno}", "rejected_input", "Rejects input when the guard condition holds.", {"type": "entry_guard", "condition": condition.expression, "exit": exit_statement}, [_span(path, statement.test), _span(path, raised)], assumptions, boundary_ids))
-            claims.append(_claim(f"exception-{statement.lineno}", "explicit_exception", f"Raises {exception['name']} when the guard condition holds.", {"type": "explicit_exception", "condition": condition.expression, "exception": exception}, [_span(path, statement.test), _span(path, raised)], assumptions, boundary_ids))
+            description = describe_condition(statement.test)
+            condition_source_text = source_expression(statement.test)
+            claims.append(_claim(f"guard-{statement.lineno}", "rejected_input", f"Rejects input when {description}.", {"type": "entry_guard", "condition": condition.expression, "source_text": condition_source_text, "exit": exit_statement}, [_span(path, statement.test), _span(path, raised)], assumptions, boundary_ids))
+            claims.append(_claim(f"exception-{statement.lineno}", "explicit_exception", f"Raises {exception['name']} when {description}.", {"type": "explicit_exception", "condition": condition.expression, "condition_source_text": condition_source_text, "source_text": source_expression(raised), "exception": exception}, [_span(path, statement.test), _span(path, raised)], assumptions, boundary_ids))
             continue
         if isinstance(statement, ast.Raise):
             exception, error = _exception(path, statement)
             if error:
                 diagnostics.append(_diagnostic("unsupported_semantics", error, _span(path, statement)))
                 continue
-            claims.append(_claim(f"exception-{statement.lineno}", "explicit_exception", f"Raises {exception['name']}.", {"type": "explicit_exception", "condition": None, "exception": exception}, [_span(path, statement)], [], []))
+            claims.append(_claim(f"exception-{statement.lineno}", "explicit_exception", f"Raises {exception['name']}.", {"type": "explicit_exception", "condition": None, "source_text": source_expression(statement), "exception": exception}, [_span(path, statement)], [], []))
             continue
         break
     return claims, boundaries, diagnostics

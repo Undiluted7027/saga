@@ -2,7 +2,7 @@ const vscode = require('vscode');
 const cp = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-const { targetNameFromLine, validateCard, hoverLines } = require('./card');
+const { targetNameFromLine, validateCard, claimPresentation, hoverLines } = require('./card');
 
 const staticCardCache = new Map();
 
@@ -78,13 +78,17 @@ function panelHtml(card, panel) {
   /** Render the shared structured result as a navigable webview document. */
   const esc = (value) => String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const renderClaims = (claims) => claims.map((claim) => {
-    const links = claim.source_spans.map((span, index) => `<a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(span))}">source ${index + 1}</a>`).join(' · ');
-    const assumptions = claim.assumptions.length ? `<small>Assumptions: ${esc(claim.assumptions.map((a) => a.text).join('; '))}</small>` : '';
+    const view = claimPresentation(claim);
+    const links = view.sourceSpans.map((span, index) => `<a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(span))}">source ${index + 1}</a>`).join(' · ');
+    const assumptions = view.assumptions.length ? `<small>Assumptions: ${esc(view.assumptions.join('; '))}</small>` : '';
+    const evidence = `<small>Method: ${esc(view.method)}${view.boundaryIds.length ? ` · Limited by: ${esc(view.boundaryIds.join(', '))}` : ''}</small>`;
     const label = claim.statement.type || claim.kind;
-    const condition = 'condition' in claim.statement ? `<details><summary>Structured condition</summary><pre>${esc(JSON.stringify(claim.statement.condition, null, 2))}</pre></details>` : '';
-    const dependencies = claim.statement.dependencies ? `<details><summary>Dependencies</summary><ul>${claim.statement.dependencies.map((dependency) => { const reads = dependency.reads?.length ? ` · reads ${dependency.reads.join(', ')}` : ''; const calls = dependency.calls?.length ? ` · calls ${dependency.calls.map((call) => call.text).join(', ')}` : ''; return `<li>${esc(dependency.kind)} · line ${dependency.source_span.start_line}${esc(reads)}${esc(calls)}</li>`; }).join('')}</ul></details>` : '';
-    const detail = claim.evidence.evidence_class === 'observed' ? `<details><summary>Observation details</summary><pre>${esc(JSON.stringify(claim.evidence.detail, null, 2))}</pre></details>` : '';
-    return `<article><h3>${esc(label.replaceAll('_', ' '))} <em>${esc(claim.evidence.evidence_class)}</em></h3><p>${esc(claim.statement.text)}</p>${condition}${dependencies}${detail}${assumptions}<p>${links}</p></article>`;
+    const sourceExpression = view.sourceText ? `<p>Source syntax: <code>${esc(view.sourceText)}</code></p>` : '';
+    const conditionSource = view.conditionSourceText ? `<p>Condition syntax: <code>${esc(view.conditionSourceText)}</code></p>` : '';
+    const condition = 'condition' in claim.statement ? `<details><summary>Structured condition</summary><pre>${esc(JSON.stringify(view.condition, null, 2))}</pre></details>` : '';
+    const dependencies = view.dependencies.length ? `<details><summary>Why this return may have this value</summary><ul>${view.dependencies.map((dependency) => { const writes = dependency.names?.length ? `defines ${dependency.names.join(', ')}` : ''; const reads = dependency.reads?.length ? `reads ${dependency.reads.join(', ')}` : ''; const calls = dependency.calls?.length ? `calls ${dependency.calls.map((call) => call.text).join(', ')}` : ''; const facts = [writes, reads, calls].filter(Boolean).join('; ') || dependency.kind.replaceAll('_', ' '); return `<li>Line ${dependency.source_span.start_line}: ${esc(facts)}</li>`; }).join('')}</ul></details>` : '';
+    const detail = view.evidenceClass === 'observed' ? `<details><summary>Observation details</summary><pre>${esc(JSON.stringify(claim.evidence.detail, null, 2))}</pre></details>` : '';
+    return `<article><h3>${esc(label.replaceAll('_', ' '))} <em>${esc(view.evidenceClass)}</em></h3><p>${esc(view.summary)}</p>${sourceExpression}${conditionSource}${condition}${dependencies}${detail}${evidence}${assumptions}<p>${links}</p></article>`;
   }).join('');
   const derivedClaims = renderClaims(card.claims.filter((claim) => claim.evidence.evidence_class !== 'observed'));
   const observedClaims = renderClaims(card.claims.filter((claim) => claim.evidence.evidence_class === 'observed'));

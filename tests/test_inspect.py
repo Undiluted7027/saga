@@ -28,6 +28,9 @@ class InspectFunctionTests(unittest.TestCase):
         self.assertEqual(card["target"]["source_span"]["start_line"], 1)
         self.assertEqual([claim["kind"] for claim in card["claims"]], ["return_dependency"])
         self.assertEqual(card["diagnostics"], [])
+        claim = card["claims"][0]
+        self.assertEqual(claim["statement"]["text"], "Returns name.")
+        self.assertEqual(claim["statement"]["source_text"], "name")
 
     def test_missing_file_and_target_are_diagnostic(self):
         missing = inspect_function("no-such-file.py", "greet")
@@ -62,6 +65,9 @@ class InspectFunctionTests(unittest.TestCase):
         terminal_result = subprocess.run([sys.executable, "-m", "saga.cli", "inspect", f"{path}::greet", "--format", "terminal"], capture_output=True, text=True, check=True)
         self.assertIn(card["target"]["signature"], terminal_result.stdout)
         self.assertIn(card["target"]["status"], terminal_result.stdout)
+        self.assertIn(card["claims"][0]["statement"]["text"], terminal_result.stdout)
+        self.assertIn("Source syntax: name", terminal_result.stdout)
+        self.assertIn("Method: intraprocedural_may_affect", terminal_result.stdout)
 
     def test_guard_and_exception_claims_preserve_structure_and_spans(self):
         path = self.write("def charge(amount):\n    if amount <= 0:\n        raise ValueError('amount')\n    return amount\n")
@@ -71,6 +77,11 @@ class InspectFunctionTests(unittest.TestCase):
         self.assertEqual(guard["statement"]["type"], "entry_guard")
         self.assertEqual(guard["statement"]["condition"]["kind"], "comparison")
         self.assertEqual(guard["statement"]["condition"]["operators"], ["<="])
+        self.assertEqual(guard["statement"]["text"], "Rejects input when amount is less than or equal to 0.")
+        self.assertEqual(guard["statement"]["source_text"], "amount <= 0")
+        self.assertEqual(card["claims"][1]["statement"]["text"], "Raises ValueError when amount is less than or equal to 0.")
+        self.assertEqual(card["claims"][1]["statement"]["source_text"], "raise ValueError('amount')")
+        self.assertEqual(card["claims"][1]["statement"]["condition_source_text"], "amount <= 0")
         self.assertEqual([span["start_line"] for span in guard["source_spans"]], [2, 3])
         self.assertTrue(guard["assumptions"])
         self.assertEqual(guard["statement"]["exit"]["exception"]["name"], "ValueError")
@@ -82,6 +93,7 @@ class InspectFunctionTests(unittest.TestCase):
         self.assertEqual(claim["statement"]["type"], "assertion")
         self.assertEqual(claim["statement"]["condition"]["kind"], "unary")
         self.assertEqual(claim["statement"]["condition"]["operator"], "not")
+        self.assertEqual(claim["statement"]["text"], "Requires account.active is falsy.")
         self.assertIn("__debug__", claim["assumptions"][0]["text"])
         self.assertEqual(card["boundaries"][0]["kind"], "dynamic_dispatch")
 
@@ -92,6 +104,20 @@ class InspectFunctionTests(unittest.TestCase):
         self.assertEqual(claim["statement"]["condition"]["kind"], "boolean")
         self.assertEqual({boundary["kind"] for boundary in card["boundaries"]}, {"unresolved_call", "dynamic_dispatch"})
         self.assertEqual({boundary["id"] for boundary in card["boundaries"]}, set(claim["boundary_ids"]))
+
+    def test_compound_guard_wording_preserves_boolean_meaning(self):
+        path = self.write("def check(items, amount):\n    if not items or amount <= 0:\n        raise ValueError()\n    return amount\n")
+        card = inspect_function(path, "check")
+        guard = next(claim for claim in card["claims"] if claim["kind"] == "rejected_input")
+        returned = next(claim for claim in card["claims"] if claim["kind"] == "return_dependency")
+        self.assertEqual(guard["statement"]["text"], "Rejects input when items is falsy or amount is less than or equal to 0.")
+        self.assertEqual(returned["statement"]["text"], "Returns amount when items is truthy and amount <= 0 is false.")
+
+    def test_nested_boolean_wording_keeps_required_grouping(self):
+        path = self.write("def check(a, b, c):\n    if not (a and b) and c:\n        raise ValueError()\n    return a\n")
+        card = inspect_function(path, "check")
+        guard = next(claim for claim in card["claims"] if claim["kind"] == "rejected_input")
+        self.assertEqual(guard["statement"]["text"], "Rejects input when (a is falsy or b is falsy) and c is truthy.")
 
     def test_late_and_nested_guards_are_not_entry_requirements(self):
         path = self.write("def late(amount):\n    total = amount\n    if amount <= 0:\n        raise ValueError()\n    return total\n\ndef nested(amount):\n    if amount:\n        if amount <= 0:\n            raise ValueError()\n    return amount\n")
@@ -113,6 +139,8 @@ class InspectFunctionTests(unittest.TestCase):
         self.assertEqual(len([boundary for boundary in card["boundaries"] if boundary["kind"] == "assignment_hooks"]), 2)
         self.assertEqual(len([boundary for boundary in card["boundaries"] if boundary["kind"] == "unresolved_call"]), 1)
         self.assertTrue(all(claim["source_spans"] for claim in writes))
+        self.assertEqual(writes[0]["statement"]["text"], "Attempts to write to order.status.")
+        self.assertEqual(writes[0]["statement"]["source_text"], "order.status")
 
     def test_common_unresolved_routines_are_classified_without_being_hidden(self):
         path = self.write("def count(values):\n    return len(values)\n")
@@ -127,6 +155,7 @@ class InspectFunctionTests(unittest.TestCase):
         effects = [claim for claim in card["claims"] if claim["kind"] == "known_effect"]
         self.assertEqual(len(effects), 2)
         self.assertTrue(all(claim["statement"]["effect"]["callee"] == "pathlib.Path.write_text" for claim in effects))
+        self.assertTrue(all(claim["statement"]["text"] == "May write text to the filesystem through pathlib.Path.write_text(...)." for claim in effects))
         self.assertFalse(card["boundaries"])
 
     def test_repeated_effects_keep_distinct_spans(self):
@@ -149,6 +178,9 @@ class InspectFunctionTests(unittest.TestCase):
         claims = [claim for claim in inspect_function(path, "choose")["claims"] if claim["kind"] == "return_dependency"]
         self.assertEqual(len(claims), 2)
         self.assertNotEqual(claims[0]["id"], claims[1]["id"])
+        self.assertEqual(claims[0]["statement"]["text"], "Returns positive when value is truthy.")
+        self.assertEqual(claims[1]["statement"]["text"], "Returns negative when value is falsy.")
+        self.assertEqual(claims[0]["statement"]["source_text"], "positive")
         self.assertTrue(any(dependency["names"] == ["positive"] for dependency in claims[0]["statement"]["dependencies"]))
         self.assertTrue(any(dependency["names"] == ["negative"] for dependency in claims[1]["statement"]["dependencies"]))
 
@@ -158,7 +190,7 @@ class InspectFunctionTests(unittest.TestCase):
         lines = {span["start_line"] for span in claim["source_spans"]}
         self.assertEqual(lines, {2, 3, 4})
         self.assertEqual(claim["statement"]["inputs"], ["y"])
-        self.assertIn("definitions: x", claim["statement"]["text"])
+        self.assertEqual(claim["statement"]["text"], "Returns x.")
 
     def test_return_claim_names_inputs_definitions_and_calls(self):
         path = self.write("def total(amount, rate):\n    subtotal = amount\n    total = add_tax(subtotal, rate)\n    return total\n")

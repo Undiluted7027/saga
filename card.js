@@ -28,6 +28,22 @@ function validateCard(card) {
   return errors;
 }
 
+function claimPresentation(claim) {
+  /** Expose card wording and its evidence without inventing editor-only meaning. */
+  return {
+    summary: claim.statement.text,
+    sourceText: claim.statement.source_text,
+    conditionSourceText: claim.statement.condition_source_text,
+    evidenceClass: claim.evidence.evidence_class,
+    method: claim.evidence.method,
+    assumptions: claim.assumptions.map((item) => item.text),
+    boundaryIds: [...claim.boundary_ids],
+    sourceSpans: [...claim.source_spans],
+    dependencies: claim.statement.dependencies || [],
+    condition: claim.statement.condition,
+  };
+}
+
 function hoverLines(card) {
   /** Render the compact hover surface while leaving full detail to the panel. */
   const lines = ['**Saga** · ' + card.target.signature];
@@ -49,4 +65,4 @@ function hoverLines(card) {
   return lines;
 }
 
-module.exports = { loadCard, targetNameFromLine, validateCard, hoverLines };
+module.exports = { loadCard, targetNameFromLine, validateCard, claimPresentation, hoverLines };
