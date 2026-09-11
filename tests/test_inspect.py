@@ -166,6 +166,17 @@ class InspectFunctionTests(unittest.TestCase):
         lines = {span["start_line"] for span in claim["source_spans"]}
         self.assertIn(3, lines)
 
+    def test_partial_analysis_keeps_return_claim_beside_unsupported_behavior(self):
+        card = inspect_function("fixture/partial_analysis.py", "partial_result")
+        self.assertEqual(card["target"]["status"], "supported")
+        self.assertTrue(any(claim["kind"] == "return_dependency" for claim in card["claims"]))
+        self.assertTrue(any(diagnostic["kind"] == "unsupported_semantics" for diagnostic in card["diagnostics"]))
+
+    def test_final_fixture_marks_async_target_unsupported(self):
+        card = inspect_function("fixture/partial_analysis.py", "unsupported_async")
+        self.assertEqual(card["target"]["status"], "unsupported")
+        self.assertEqual(card["diagnostics"][0]["kind"], "unsupported_target")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -32,6 +32,16 @@ The default trace is written to `.saga/trace.json`. It is bounded, redacts
 sensitive fields, records the Python environment, and is an observation input;
 it is not proof of behavior outside the recorded executions.
 
+To measure the static refresh path after a warm-up:
+
+```sh
+uv run python scripts/benchmark_inspect.py \
+  fixture/process_order.py::process_order
+```
+
+The integration and developer-evaluation protocol is in
+`docs/poc-evaluation.md`.
+
 To try the editor flow, open this repository in VS Code, install the repository
 as an extension through the Extension Development Host (`Run Extension`), and
 open `fixture/process_order.py`. Place the cursor on `process_order`, then use

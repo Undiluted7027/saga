@@ -1,7 +1,7 @@
 {
   "name": "saga-vscode",
   "displayName": "Saga Evidence Card",
-  "description": "Fixture-backed evidence cards for Python functions.",
+  "description": "Evidence cards for Python functions.",
   "version": "0.1.0",
   "private": true,
   "engines": { "vscode": "^1.85.0" },

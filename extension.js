@@ -4,6 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { validateCard, hoverLines } = require('./card');
 
+const staticCardCache = new Map();
+
 function targetName(document, position) {
   /** Return the function name only when the cursor is on a def statement. */
   const word = document.getWordRangeAtPosition(position);
@@ -13,13 +15,24 @@ function targetName(document, position) {
   return /^\s*(?:async\s+)?def\s+/.test(line) ? name : undefined;
 }
 
-function requestCard(context, document, name) {
+function requestCard(context, document, name, force = false) {
   /** Ask the real Python inspector for the current document and target. */
+  let stamp = 'missing';
+  try {
+    const stat = fs.statSync(document.uri.fsPath);
+    stamp = `${stat.mtimeMs}:${stat.size}`;
+  } catch {}
+  const cacheKey = `${document.uri.fsPath}::${name}::${stamp}`;
+  if (!force && staticCardCache.has(cacheKey)) return Promise.resolve(staticCardCache.get(cacheKey));
   return new Promise((resolve, reject) => {
     const selector = document.uri.fsPath + '::' + name;
     cp.execFile('python3', ['-m', 'saga.cli', 'inspect', selector, '--format', 'json'], { cwd: context.extensionPath, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
       if (!stdout) return reject(new Error(stderr.trim() || error?.message || 'Saga inspection failed'));
-      try { resolve(JSON.parse(stdout)); } catch (parseError) { reject(parseError); }
+      try {
+        const card = JSON.parse(stdout);
+        staticCardCache.set(cacheKey, card);
+        resolve(card);
+      } catch (parseError) { reject(parseError); }
     });
   });
 }
@@ -85,6 +98,33 @@ function panelHtml(card, panel) {
   return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${panel.webview.cspSource};"><style>body{font-family:var(--vscode-font-family);padding:0 2em;line-height:1.45}h1{font-size:1.35em}h3{margin-bottom:.25em;text-transform:capitalize}article{border-top:1px solid var(--vscode-panel-border);padding:.7em 0}em{font-size:.75em;font-weight:normal;background:var(--vscode-textBlockQuote-background);padding:.15em .4em}.boundary{border-left:3px solid var(--vscode-editorWarning-foreground);padding-left:1em}.diagnostic{border-left:3px solid var(--vscode-editorError-foreground);padding-left:1em}small{display:block;color:var(--vscode-descriptionForeground)}pre{white-space:pre-wrap}</style></head><body><h1>${esc(card.target.name)}</h1><p><code>${esc(card.target.signature)}</code></p><p><a href="command:saga.runTests?${target}">Run tests for this function</a></p><h2>Derived claims</h2>${derivedClaims || '<p>None</p>'}<h2>Observed claims</h2>${observedClaims || '<p>None</p>'}<h2>Boundaries</h2>${boundaries || '<p>None</p>'}<h2>Diagnostics</h2>${diagnostics || '<p>None</p>'}</body></html>`;
 }
 
+function showCardPanel(context, card, document, name) {
+  /** Keep an evidence panel current after the source file is saved. */
+  const panel = vscode.window.createWebviewPanel('sagaEvidenceCard', 'Saga Evidence Card', vscode.ViewColumn.Beside, { enableScripts: false, enableCommandUris: ['saga.navigate', 'saga.runTests'] });
+  let refreshTimer;
+  const render = (nextCard) => { panel.webview.html = panelHtml(nextCard, panel); };
+  const refresh = async () => {
+    try {
+      render(await requestCard(context, document, name, true));
+    } catch (error) {
+      // Keep the last valid card visible when a transient edit is not parseable.
+      void vscode.window.showWarningMessage('Saga could not refresh the evidence card: ' + error.message);
+    }
+  };
+  const saveSubscription = vscode.workspace.onDidSaveTextDocument((savedDocument) => {
+    if (savedDocument.uri.toString() !== document.uri.toString()) return;
+    staticCardCache.clear();
+    clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(refresh, 100);
+  });
+  panel.onDidDispose(() => {
+    saveSubscription.dispose();
+    clearTimeout(refreshTimer);
+  });
+  render(card);
+  return panel;
+}
+
 function activate(context) {
   /** Register the fixture-era hover, real inspection, panel, and navigation flows. */
   const provider = vscode.languages.registerHoverProvider('python', { provideHover(document, position) {
@@ -108,8 +148,7 @@ function activate(context) {
     let card;
     try { card = await requestCard(context, document, name); }
     catch (error) { return vscode.window.showErrorMessage('Saga inspection failed: ' + error.message); }
-    const panel = vscode.window.createWebviewPanel('sagaEvidenceCard', 'Saga Evidence Card', vscode.ViewColumn.Beside, { enableScripts: false, enableCommandUris: ['saga.navigate', 'saga.runTests'] });
-    panel.webview.html = panelHtml(card, panel);
+    showCardPanel(context, card, document, name);
   });
   const runTests = vscode.commands.registerCommand('saga.runTests', async (request) => {
     const activeEditor = vscode.window.activeTextEditor;
@@ -121,8 +160,7 @@ function activate(context) {
     let card;
     try { card = await requestTestCard(context, document, name); }
     catch (error) { return vscode.window.showErrorMessage('Saga test run failed: ' + error.message); }
-    const panel = vscode.window.createWebviewPanel('sagaEvidenceCard', 'Saga Evidence Card', vscode.ViewColumn.Beside, { enableScripts: false, enableCommandUris: ['saga.navigate', 'saga.runTests'] });
-    panel.webview.html = panelHtml(card, panel);
+    showCardPanel(context, card, document, name);
   });
   const navigateCommand = vscode.commands.registerCommand('saga.navigate', (span) => navigate(span, context));
   context.subscriptions.push(provider, open, runTests, navigateCommand);
