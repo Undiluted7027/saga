@@ -24,8 +24,8 @@ class ObservationTests(unittest.TestCase):
             {"test_id": "test_repeat", "input": {"amount": 2}, "outcome": "return", "return": 4},
             {"test_id": "test_b", "input": {"amount": 3}, "outcome": "return", "return": 6},
         ]}
-        claims = evaluate_observations(card(), trace)
-        detail = claims[0]["evidence"]["detail"]
+        result = evaluate_observations(card(), trace)
+        detail = result.claims[0]["evidence"]["detail"]
         self.assertEqual(detail["support"], 2)
         self.assertEqual(detail["input_domain"]["amount"], {"kind": "numeric", "min": 2, "max": 3, "distinct": 2})
         self.assertEqual(detail["return_domain"], {"kind": "numeric", "min": 4, "max": 6, "distinct": 2})
@@ -39,8 +39,53 @@ class ObservationTests(unittest.TestCase):
             {"test_id": "a", "input": {"x": 1}, "outcome": "return", "return": -1},
             {"test_id": "b", "input": {"x": 2}, "outcome": "return", "return": 2},
         ]}
-        self.assertEqual(evaluate_observations(card(), constant), [])
-        self.assertEqual(evaluate_observations(card(), negative), [])
+        constant_result = evaluate_observations(card(), constant)
+        negative_result = evaluate_observations(card(), negative)
+        self.assertFalse(constant_result.claims)
+        self.assertEqual(
+            constant_result.status["reason"],
+            "insufficient_distinct_outputs",
+        )
+        self.assertFalse(negative_result.claims)
+        self.assertEqual(negative_result.status["reason"], "template_contradicted")
+
+    def test_empty_observation_reasons_are_distinct(self):
+        cases = {
+            "no_recorded_executions": {"executions": []},
+            "unsupported_return_shape": {"executions": [
+                {"test_id": "dict", "input": {"x": 1}, "outcome": "return", "return": {"kind": "mapping", "items": []}},
+            ]},
+            "unusable_serialized_values": {"executions": [
+                {"test_id": "redacted", "input": {"token": {"kind": "redacted"}}, "outcome": "return", "return": 1},
+            ]},
+            "insufficient_distinct_inputs": {"executions": [
+                {"test_id": "same", "input": {"x": 1}, "outcome": "return", "return": 2},
+                {"test_id": "repeat", "input": {"x": 1}, "outcome": "return", "return": 2},
+            ]},
+        }
+        for reason, trace in cases.items():
+            with self.subTest(reason=reason):
+                result = evaluate_observations(card(), trace)
+                self.assertFalse(result.claims)
+                self.assertEqual(result.status["state"], "no_claim")
+                self.assertEqual(result.status["reason"], reason)
+
+    def test_successful_observation_keeps_environment_and_run_counts(self):
+        trace = {
+            "environment": {"python_version": "3.12.7", "platform": "test-os"},
+            "executions": [
+                {"test_id": "a", "input": {"x": 1}, "outcome": "return", "return": 2},
+                {"test_id": "b", "input": {"x": 2}, "outcome": "return", "return": 4},
+                {"test_id": "c", "input": {"x": -1}, "outcome": "raise", "exception": {"type": "ValueError"}},
+            ],
+        }
+        result = evaluate_observations(card(), trace)
+        self.assertEqual(result.status["state"], "claim_produced")
+        self.assertEqual(result.status["execution_count"], 3)
+        self.assertEqual(result.status["raised_executions"], 1)
+        detail = result.claims[0]["evidence"]["detail"]
+        self.assertEqual(detail["environment"], trace["environment"])
+        self.assertEqual(detail["raised_executions"], 1)
 
     def test_sensitive_and_truncated_values_cannot_support_input_claims(self):
         serialized = serialize_value(SimpleNamespace(password="secret", nested=[1, 2, 3]))
@@ -55,13 +100,39 @@ class ObservationTests(unittest.TestCase):
             "boundaries": [],
             "diagnostics": [],
         }
-        observed_card["claims"] = evaluate_observations(observed_card, {"executions": [
+        result = evaluate_observations(observed_card, {"executions": [
             {"test_id": "a", "input": {"value": {"attributes": {"secret": "redacted"}}}, "outcome": "return", "return": 1},
             {"test_id": "b", "input": {"value": {"attributes": {"secret": "redacted-2"}}}, "outcome": "return", "return": 2},
         ]})
+        observed_card["claims"] = result.claims
+        observed_card["observation_status"] = result.status
         output = terminal(observed_card)
         self.assertIn("Input domain:", output)
         self.assertNotIn("attributes", output)
+
+    def test_terminal_explains_unsupported_return_without_a_claim(self):
+        status_card = {
+            "target": {"qualified_name": "target", "name": "target", "status": "supported", "path": "module.py", "signature": "target(value)", "source_span": card()["target"]["source_span"]},
+            "claims": [],
+            "boundaries": [],
+            "diagnostics": [],
+        }
+        result = evaluate_observations(status_card, {"executions": [
+            {"test_id": "dict", "input": {"value": 1}, "outcome": "return", "return": {"kind": "mapping", "items": []}},
+        ]})
+        status_card["observation_status"] = result.status
+        output = terminal(status_card)
+        self.assertIn("unsupported_return_shape", output)
+        self.assertIn("no current observation template", output)
+
+    def test_static_card_does_not_report_a_test_run(self):
+        static_card = {
+            "target": {"qualified_name": "target", "name": "target", "status": "supported", "path": "module.py", "signature": "target()", "source_span": card()["target"]["source_span"]},
+            "claims": [],
+            "boundaries": [],
+            "diagnostics": [],
+        }
+        self.assertNotIn("Observation status", terminal(static_card))
 
     def test_boundary_trace_records_returns_and_escaping_exceptions(self):
         with tempfile.TemporaryDirectory() as directory:

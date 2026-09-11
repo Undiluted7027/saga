@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from .boundaries import group_boundaries
+from .diagnostics import group_diagnostics
 from .views import EMPTY_MESSAGES, VIEW_LABELS, view_is_empty
 
 
@@ -72,6 +73,7 @@ def terminal(
     card: dict[str, Any],
     show_routine_boundaries: bool = False,
     show_boundary_sites: bool = False,
+    show_diagnostic_sites: bool = False,
 ) -> str:
     """Render the structured card for concise terminal inspection."""
     target = card["target"]
@@ -128,6 +130,12 @@ def terminal(
                 lines.append(f"    Observed domain: {_compact_domain(detail['domain'])}")
             if detail.get("raised_executions"):
                 lines.append(f"    Raised executions: {detail['raised_executions']}")
+            if detail.get("environment"):
+                environment = ", ".join(
+                    f"{name}: {value}"
+                    for name, value in detail["environment"].items()
+                )
+                lines.append(f"    Environment: {environment}")
         for span in claim["source_spans"]:
             lines.append(f"    Source: {span['path']}:{span['start_line']}")
         for assumption in claim["assumptions"]:
@@ -160,7 +168,49 @@ def terminal(
                 )
         else:
             lines.append("    Re-run with --show-routine-boundaries to expand them.")
-    for diagnostic in card["diagnostics"]:
-        lines.append(f"  Diagnostic [{diagnostic['kind']}]: {diagnostic['message']}")
-        _local_call_chain(lines, diagnostic.get("call_chain", []))
+    observation_status = card.get("observation_status")
+    if observation_status:
+        lines.append(
+            f"  Observation status [{observation_status['state']} · "
+            f"{observation_status['reason']}]: {observation_status['message']}"
+        )
+        lines.append(
+            "    Executions: "
+            f"{observation_status['execution_count']} total, "
+            f"{observation_status['returned_executions']} returned, "
+            f"{observation_status['raised_executions']} raised"
+        )
+        if observation_status["tests"]:
+            lines.append(
+                "    Tests: " + ", ".join(observation_status["tests"])
+            )
+        if observation_status["environment"]:
+            environment = ", ".join(
+                f"{name}: {value}"
+                for name, value in observation_status["environment"].items()
+            )
+            lines.append(f"    Environment: {environment}")
+    diagnostic_groups = group_diagnostics(card)
+    if diagnostic_groups:
+        lines.append(
+            f"  Diagnostics: {len(card['diagnostics'])} reports in "
+            f"{len(diagnostic_groups)} groups"
+        )
+    for group in diagnostic_groups:
+        reports = "report" if group["report_count"] == 1 else "reports"
+        sites = "site" if group["site_count"] == 1 else "sites"
+        lines.append(
+            f"  Diagnostic [{group['kind']}] — {group['report_count']} {reports} "
+            f"at {group['site_count']} {sites}: {group['message']}"
+        )
+        if group["report_count"] > 1 and not show_diagnostic_sites:
+            lines.append(
+                "    Re-run with --show-diagnostic-sites to list source locations."
+            )
+            continue
+        for occurrence in group["occurrences"]:
+            span = occurrence["source_span"]
+            if span:
+                lines.append(f"    Source: {span['path']}:{span['start_line']}")
+            _local_call_chain(lines, occurrence["call_chain"])
     return "\n".join(lines)

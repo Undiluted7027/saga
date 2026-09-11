@@ -41,6 +41,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="list every source location in repeated boundary groups",
     )
+    inspect_parser.add_argument(
+        "--show-diagnostic-sites",
+        action="store_true",
+        help="list source locations in repeated diagnostic groups",
+    )
     test_parser = subparsers.add_parser("test", help="run pytest with selected-target instrumentation")
     test_parser.add_argument("selector", help="target in the form path.py::qualified_name")
     test_parser.add_argument("--format", choices=("json", "terminal"), default="json")
@@ -61,6 +66,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="list every source location in repeated boundary groups",
     )
+    test_parser.add_argument(
+        "--show-diagnostic-sites",
+        action="store_true",
+        help="list source locations in repeated diagnostic groups",
+    )
     args = parser.parse_args(raw_argv)
     if "::" not in args.selector or args.selector.count("::") != 1:
         parser.error("selector must have the form path.py::qualified_name")
@@ -79,6 +89,7 @@ def main(argv: list[str] | None = None) -> int:
                 card,
                 show_routine_boundaries=args.show_routine_boundaries,
                 show_boundary_sites=args.show_boundary_sites,
+                show_diagnostic_sites=args.show_diagnostic_sites,
             )
         )
     return exit_code

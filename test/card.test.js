@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { loadCard, targetNameFromLine, validateCard, claimPresentation, focusCard, viewPresentation, boundaryGroups, hoverLines } = require('../card');
+const { loadCard, targetNameFromLine, validateCard, claimPresentation, focusCard, viewPresentation, boundaryGroups, diagnosticGroups, hoverLines } = require('../card');
 
 test('fixture validates against the evidence-card contract', () => {
   const card = loadCard();
@@ -95,6 +95,21 @@ test('editor groups repeated boundaries without dropping occurrences', () => {
   assert.deepEqual(card.boundaries, before);
 });
 
+test('editor groups repeated diagnostics without changing the raw reports', () => {
+  const card = loadCard();
+  card.diagnostics = [
+    { kind: 'unsupported_semantics', message: 'Try is unsupported.', source_span: card.target.source_span },
+    { kind: 'unsupported_semantics', message: 'Try is unsupported.', source_span: card.target.source_span },
+    { kind: 'unsupported_semantics', message: 'Continue is unsupported.', source_span: card.target.source_span }
+  ];
+  const before = structuredClone(card.diagnostics);
+  const groups = diagnosticGroups(card);
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0].reportCount, 2);
+  assert.equal(groups[0].siteCount, 1);
+  assert.deepEqual(card.diagnostics, before);
+});
+
 test('editor keeps different stop reasons and boundary classes separate', () => {
   const card = loadCard();
   const external = structuredClone(card.boundaries[1]);
@@ -139,6 +154,24 @@ test('editor mutation view retains effect-relevant boundaries without inventing 
   assert.deepEqual(focused.claims, []);
   assert.deepEqual(focused.boundaries.map((item) => item.id), ['notify']);
   assert.equal(viewPresentation(focused).empty, false);
+});
+
+test('focused editor views preserve test observation status', () => {
+  const card = loadCard();
+  card.observation_status = {
+    state: 'no_claim',
+    template: 'numeric_return_non_negative',
+    reason: 'unsupported_return_shape',
+    message: 'No template supports this return shape.',
+    execution_count: 2,
+    returned_executions: 2,
+    raised_executions: 0,
+    distinct_inputs: 0,
+    distinct_outputs: 0,
+    tests: ['test_report'],
+    environment: { python_version: '3.12' }
+  };
+  assert.equal(focusCard(card, 'return').observation_status, card.observation_status);
 });
 
 test('editor boundary and empty views do not imply completeness', () => {

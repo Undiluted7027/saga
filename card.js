@@ -152,6 +152,35 @@ function boundaryGroups(card) {
   return groups;
 }
 
+function diagnosticGroups(card) {
+  /** Group equal diagnostics for display while retaining distinct source sites. */
+  const groups = [];
+  const byKey = new Map();
+  for (const diagnostic of card.diagnostics || []) {
+    const key = JSON.stringify([diagnostic.kind, diagnostic.message]);
+    let group = byKey.get(key);
+    if (!group) {
+      group = { kind: diagnostic.kind, message: diagnostic.message, reportCount: 0, occurrences: [], occurrenceKeys: new Set() };
+      byKey.set(key, group);
+      groups.push(group);
+    }
+    group.reportCount += 1;
+    const occurrenceKey = JSON.stringify([
+      diagnostic.source_span || null,
+      (diagnostic.call_chain || []).map((link) => link.call_site)
+    ]);
+    if (!group.occurrenceKeys.has(occurrenceKey)) {
+      group.occurrenceKeys.add(occurrenceKey);
+      group.occurrences.push({ sourceSpan: diagnostic.source_span, callChain: diagnostic.call_chain || [] });
+    }
+  }
+  for (const group of groups) {
+    group.siteCount = group.occurrences.length;
+    delete group.occurrenceKeys;
+  }
+  return groups;
+}
+
 function hoverLines(card) {
   /** Render the compact hover surface while leaving full detail to the panel. */
   const lines = ['**Saga** · ' + card.target.signature];
@@ -181,4 +210,4 @@ function hoverLines(card) {
   return lines;
 }
 
-module.exports = { loadCard, targetNameFromLine, validateCard, claimPresentation, focusCard, viewPresentation, boundaryGroups, hoverLines };
+module.exports = { loadCard, targetNameFromLine, validateCard, claimPresentation, focusCard, viewPresentation, boundaryGroups, diagnosticGroups, hoverLines };

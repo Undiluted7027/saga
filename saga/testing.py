@@ -58,5 +58,7 @@ def run_tests(selector: str, pytest_args: list[str], trace_output: str = ".saga/
     if trace.get("trace_schema_version") != TRACE_SCHEMA_VERSION:
         card["diagnostics"].append({"kind": "instrumentation", "message": "Saga received an unsupported trace schema version."})
         return card, process.returncode or 1
-    card["claims"].extend(evaluate_observations(card, trace))
+    observations = evaluate_observations(card, trace)
+    card["claims"].extend(observations.claims)
+    card["observation_status"] = observations.status
     return card, process.returncode

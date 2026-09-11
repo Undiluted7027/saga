@@ -2,7 +2,7 @@ const vscode = require('vscode');
 const cp = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-const { targetNameFromLine, validateCard, claimPresentation, focusCard, viewPresentation, boundaryGroups, hoverLines } = require('./card');
+const { targetNameFromLine, validateCard, claimPresentation, focusCard, viewPresentation, boundaryGroups, diagnosticGroups, hoverLines } = require('./card');
 
 const staticCardCache = new Map();
 
@@ -112,20 +112,26 @@ function panelHtml(card, panel) {
   const routineGroupLabel = routineBoundaries.length === 1 ? 'group' : 'groups';
   const routineSummary = routineBoundaries.length ? `<details><summary>${routineSites} routine unresolved call sites in ${routineBoundaries.length} ${routineGroupLabel}</summary>${routineBoundaries.map(renderBoundaryGroup).join('')}</details>` : '';
   const boundaries = importantBoundaries.map(renderBoundaryGroup).join('') + routineSummary;
-  const diagnostics = card.diagnostics.map((diagnostic) => {
-    const source = diagnostic.source_span ? ` <a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(diagnostic.source_span))}">source</a>` : '';
-    const chain = renderCallChain(diagnostic.call_chain);
-    return `<article class="diagnostic"><h3>${esc(diagnostic.kind)}</h3><p>${esc(diagnostic.message)}${source}</p>${chain}</article>`;
+  const diagnostics = diagnosticGroups(card).map((group) => {
+    const sites = group.occurrences.map((occurrence) => { const source = occurrence.sourceSpan ? `<a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(occurrence.sourceSpan))}">${esc(`${occurrence.sourceSpan.path}:${occurrence.sourceSpan.start_line}`)}</a>` : 'No source location'; return `<li>${source}${renderCallChain(occurrence.callChain)}</li>`; }).join('');
+    const count = `${group.reportCount} report${group.reportCount === 1 ? '' : 's'} at ${group.siteCount} source site${group.siteCount === 1 ? '' : 's'}`;
+    const locations = group.reportCount > 1 ? `<details><summary>${esc(count)}</summary><ol>${sites}</ol></details>` : `<ol>${sites}</ol>`;
+    return `<article class="diagnostic"><h3>${esc(group.kind)}</h3><p>${esc(group.message)}</p>${locations}</article>`;
   }).join('');
+  const observationStatus = card.observation_status;
+  const observationSummary = observationStatus
+    ? `<article class="observation-status"><h3>${esc(observationStatus.state.replaceAll('_', ' '))}</h3><p>${esc(observationStatus.message)}</p><small>${observationStatus.execution_count} executions · ${observationStatus.returned_executions} returned · ${observationStatus.raised_executions} raised · reason: ${esc(observationStatus.reason.replaceAll('_', ' '))}</small>${observationStatus.tests.length ? `<small>Tests: ${esc(observationStatus.tests.join(', '))}</small>` : ''}${Object.keys(observationStatus.environment).length ? `<small>Environment: ${esc(Object.entries(observationStatus.environment).map(([name, value]) => `${name}: ${value}`).join(', '))}</small>` : ''}</article>`
+    : '<p>No completed test trace is attached to this card.</p>';
   const request = (name) => encodeURIComponent(JSON.stringify({ path: card.target.path, name: card.target.name, view: name }));
   const navigation = `<nav><a href="command:saga.openEvidenceCard?${request('full')}">Full card</a> · <a href="command:saga.openEvidenceCard?${request('return')}">Return</a> · <a href="command:saga.openEvidenceCard?${request('mutation')}">Mutation</a> · <a href="command:saga.openEvidenceCard?${request('failure')}">Failure</a> · <a href="command:saga.openEvidenceCard?${request('boundary')}">Boundaries</a></nav>`;
   const empty = view.empty ? `<p class="empty">${esc(view.emptyMessage)}</p>` : '';
-  const fullContent = `<h2>Derived claims</h2>${derivedClaims || '<p>None</p>'}<h2>Observed claims</h2>${observedClaims || '<p>None</p>'}<h2>Boundaries</h2>${boundaries || '<p>None</p>'}<h2>Diagnostics</h2>${diagnostics || '<p>None</p>'}`;
+  const fullContent = `<h2>Derived claims</h2>${derivedClaims || '<p>None</p>'}<h2>Observed claims</h2>${observedClaims}${observationSummary}<h2>Boundaries</h2>${boundaries || '<p>None</p>'}<h2>Diagnostics</h2>${diagnostics || '<p>None</p>'}`;
   const focusedClaims = view.name === 'boundary' ? '' : `<h2>${esc(view.label)}</h2>${empty || renderClaims(card.claims)}`;
   const focusedBoundaries = `<h2>${view.name === 'boundary' ? 'Analysis boundaries' : 'Related boundaries'}</h2>${view.name === 'boundary' && empty ? empty : boundaries || '<p>None limit this evidence.</p>'}`;
   const focusedDiagnostics = diagnostics ? `<h2>Target diagnostics</h2>${diagnostics}` : '';
-  const content = view.name === 'full' ? fullContent : focusedClaims + focusedBoundaries + focusedDiagnostics;
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${panel.webview.cspSource};"><style>body{font-family:var(--vscode-font-family);padding:0 2em;line-height:1.45}h1{font-size:1.35em}h3{margin-bottom:.25em;text-transform:capitalize}nav{margin:.8em 0}.empty{border-left:3px solid var(--vscode-editorWarning-foreground);padding:.6em 1em}article{border-top:1px solid var(--vscode-panel-border);padding:.7em 0}em{font-size:.75em;font-weight:normal;background:var(--vscode-textBlockQuote-background);padding:.15em .4em}.boundary{border-left:3px solid var(--vscode-editorWarning-foreground);padding-left:1em}.diagnostic{border-left:3px solid var(--vscode-editorError-foreground);padding-left:1em}small{display:block;color:var(--vscode-descriptionForeground)}pre{white-space:pre-wrap}</style></head><body><h1>${esc(card.target.name)} · ${esc(view.label)}</h1><p><code>${esc(card.target.signature)}</code></p>${navigation}<p><a href="command:saga.runTests?${request(view.name)}">Run tests for this function</a></p>${content}</body></html>`;
+  const focusedObservationStatus = observationStatus ? `<h2>Test observation status</h2>${observationSummary}` : '';
+  const content = view.name === 'full' ? fullContent : focusedClaims + focusedBoundaries + focusedObservationStatus + focusedDiagnostics;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${panel.webview.cspSource};"><style>body{font-family:var(--vscode-font-family);padding:0 2em;line-height:1.45}h1{font-size:1.35em}h3{margin-bottom:.25em;text-transform:capitalize}nav{margin:.8em 0}.empty{border-left:3px solid var(--vscode-editorWarning-foreground);padding:.6em 1em}article{border-top:1px solid var(--vscode-panel-border);padding:.7em 0}em{font-size:.75em;font-weight:normal;background:var(--vscode-textBlockQuote-background);padding:.15em .4em}.boundary{border-left:3px solid var(--vscode-editorWarning-foreground);padding-left:1em}.diagnostic{border-left:3px solid var(--vscode-editorError-foreground);padding-left:1em}.observation-status{border-left:3px solid var(--vscode-editorInfo-foreground);padding-left:1em}small{display:block;color:var(--vscode-descriptionForeground)}pre{white-space:pre-wrap}</style></head><body><h1>${esc(card.target.name)} · ${esc(view.label)}</h1><p><code>${esc(card.target.signature)}</code></p>${navigation}<p><a href="command:saga.runTests?${request(view.name)}">Run tests for this function</a></p>${content}</body></html>`;
 }
 
 const evidencePanels = new Map();
