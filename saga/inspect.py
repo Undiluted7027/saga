@@ -149,4 +149,15 @@ def inspect_function(file_path: str, qualified_name: str) -> dict[str, Any]:
         card["claims"].extend(guard_claims)
         card["boundaries"].extend(guard_boundaries)
         card["diagnostics"].extend(guard_diagnostics)
+        from .effects import analyze_effects
+
+        effects = analyze_effects(file_path, tree, node)
+        card["claims"].extend(effects.claims)
+        existing_boundaries = {(item["kind"], tuple(sorted(item["source_span"].items()))) for item in card["boundaries"]}
+        for boundary in effects.boundaries:
+            key = (boundary["kind"], tuple(sorted(boundary["source_span"].items())))
+            if key not in existing_boundaries:
+                card["boundaries"].append(boundary)
+                existing_boundaries.add(key)
+        card["diagnostics"].extend(effects.diagnostics)
     return card

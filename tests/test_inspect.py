@@ -105,6 +105,29 @@ class InspectFunctionTests(unittest.TestCase):
         self.assertEqual(card["diagnostics"][0]["kind"], "unsupported_semantics")
         self.assertIn("source_span", card["diagnostics"][0])
 
+    def test_writes_and_unresolved_calls_are_source_linked(self):
+        path = self.write("def mutate(order, values):\n    global total\n    order.status = 'ready'\n    values[0] = 1\n    total = 2\n    unknown(values)\n    return order\n")
+        card = inspect_function(path, "mutate")
+        writes = [claim for claim in card["claims"] if claim["kind"] == "attempted_write"]
+        self.assertEqual([claim["statement"]["target"]["kind"] for claim in writes], ["attribute", "subscript", "name"])
+        self.assertEqual(len([boundary for boundary in card["boundaries"] if boundary["kind"] == "assignment_hooks"]), 2)
+        self.assertEqual(len([boundary for boundary in card["boundaries"] if boundary["kind"] == "unresolved_call"]), 1)
+        self.assertTrue(all(claim["source_spans"] for claim in writes))
+
+    def test_registry_resolves_pathlib_aliases_without_unresolved_boundaries(self):
+        path = self.write("import pathlib as pl\nfrom pathlib import Path as FilePath\n\ndef write_one(path):\n    pl.Path(path).write_text('one')\n    FilePath(path).write_text('two')\n    return path\n")
+        card = inspect_function(path, "write_one")
+        effects = [claim for claim in card["claims"] if claim["kind"] == "known_effect"]
+        self.assertEqual(len(effects), 2)
+        self.assertTrue(all(claim["statement"]["effect"]["callee"] == "pathlib.Path.write_text" for claim in effects))
+        self.assertFalse(card["boundaries"])
+
+    def test_repeated_effects_keep_distinct_spans(self):
+        path = self.write("from pathlib import Path\n\ndef write_twice(path):\n    Path(path).write_text('one')\n    Path(path).write_text('two')\n")
+        effects = [claim for claim in inspect_function(path, "write_twice")["claims"] if claim["kind"] == "known_effect"]
+        self.assertEqual(len(effects), 2)
+        self.assertNotEqual(effects[0]["source_spans"], effects[1]["source_spans"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -18,6 +18,10 @@ def terminal(card: dict[str, Any]) -> str:
             lines.append(f"    Condition: {json.dumps(statement['condition'], sort_keys=True)}")
         for assumption in claim["assumptions"]:
             lines.append(f"    Assumption: {assumption['text']}")
+    lines.append(f"  Boundaries: {len(card['boundaries'])}")
+    for boundary in card["boundaries"]:
+        span = boundary["source_span"]
+        lines.append(f"  Boundary [{boundary['kind']}] {boundary['target']['text']} at {span['path']}:{span['start_line']}: {boundary['reason']}")
     for diagnostic in card["diagnostics"]:
         lines.append(f"  Diagnostic [{diagnostic['kind']}]: {diagnostic['message']}")
     return "\n".join(lines)

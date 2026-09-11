@@ -25,12 +25,17 @@ function validateCard(card) {
 function hoverLines(card) {
   /** Render the compact hover surface while leaving full detail to the panel. */
   const lines = ['**Saga** · ' + card.target.signature];
-  const groups = [['rejected_input', 'Guard'], ['return_dependency', 'Return'], ['known_effect', 'Effect'], ['test_observation', 'Observed']];
-  for (const [kind, label] of groups) {
+  const groups = [['rejected_input', 'Guard'], ['return_dependency', 'Return'], ['attempted_write', 'Write'], ['known_effect', 'Effect'], ['test_observation', 'Observed']];
+  if (card.boundaries.length) groups.push(['boundary', 'Boundary']);
+  for (const [kind, label] of groups.slice(0, 4)) {
     const claim = card.claims.find((item) => item.kind === kind);
-    if (claim) {
-      const span = encodeURIComponent(JSON.stringify(claim.source_spans[0]));
-      lines.push('- [' + label + '](command:saga.navigate?' + span + '): ' + claim.statement.text);
+    const boundary = card.boundaries.find((item) => kind === 'boundary');
+    const item = claim || boundary;
+    if (item) {
+      const source = item.source_spans ? item.source_spans[0] : item.source_span;
+      const span = encodeURIComponent(JSON.stringify(source));
+      const text = claim ? claim.statement.text : item.target.text + ' is unresolved';
+      lines.push('- [' + label + '](command:saga.navigate?' + span + '): ' + text);
     }
   }
   const target = encodeURIComponent(JSON.stringify({ path: card.target.path, name: card.target.name }));
