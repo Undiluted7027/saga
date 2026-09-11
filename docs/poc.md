@@ -8,7 +8,7 @@ The POC succeeds if this helps a developer understand unfamiliar code without tr
 
 ## The demo
 
-The final demo opens a small unfamiliar Python project in VS Code and inspects one function that validates input, calculates a return value, mutates state, calls an external dependency, and is exercised by tests.
+The demo opens a small unfamiliar Python project in VS Code and inspects one function that validates input, calculates a return value, mutates state, calls an external dependency, and is exercised by tests.
 
 1. The developer hovers over the function.
 2. Saga shows rejected inputs and explicit exceptions derived from guards.
@@ -19,7 +19,7 @@ The final demo opens a small unfamiliar Python project in VS Code and inspects o
 7. The developer expands a claim and jumps to the source that supports it.
 8. The developer changes the function and reruns analysis. The card updates without editing or opening a generated documentation file.
 
-Until this flow works and developers find it useful, there is no reason to build package documentation, pull-request automation, agent integrations, concept assignment, or rationale inference.
+The integrated flow works on the fixture and falls apart on more demanding functions. We are fixing those gaps before putting Saga in front of outside developers. Package documentation, pull-request automation, agent integrations, concept assignment, and rationale inference remain out of scope.
 
 ## POC question
 
@@ -27,9 +27,15 @@ Can a small set of source-linked behavioral claims help a developer understand a
 
 This POC tests whether the evidence card is useful and whether its claims stay honest within a deliberately small Python subset.
 
+## Current decision
+
+The integrated POC earned a `revise`. Saga produces source-linked derived and observed claims quickly. On non-curated code, the return explanations get unwieldy, unresolved boundaries crowd out useful facts, and analysis often stops at a local helper.
+
+Developer sessions can wait. Each new slice must answer a concrete question on non-curated code and leave the card visibly more useful.
+
 ## Product boundary
 
-The POC includes:
+The POC and capability revision cover:
 
 - Python 3.12 source files.
 - Module-level synchronous functions.
@@ -37,6 +43,8 @@ The POC includes:
 - A versioned structured evidence schema.
 - Entry-guard and explicit-exception analysis.
 - Intraprocedural return dependencies.
+- Bounded one-hop summaries for module-local calls during the capability revision.
+- Explicit escaping exceptions found in the selected function or a supported local callee.
 - Direct write and known-effect detection.
 - Explicit opaque-boundary reporting.
 - A small set of test-observed properties.
@@ -45,7 +53,7 @@ The POC includes:
 - Navigation from claims to source locations.
 - A fixture project that demonstrates supported and unsupported behavior.
 
-The POC does not include:
+They do not include:
 
 - Free-form documentation generation.
 - Natural-language claim verification.
@@ -54,7 +62,7 @@ The POC does not include:
 - General symbolic execution or whole-program verification.
 - Arbitrary Python versions.
 - Async functions, generators, nested functions, decorated target functions, or runtime-generated code.
-- Full interprocedural analysis.
+- Recursive, whole-program, or package-wide interprocedural analysis.
 - Complete type inference.
 - Concept assignment or rationale inference.
 - Pull-request comments, CI policy, or coding-agent integrations.
@@ -73,12 +81,12 @@ The POC analyzes Python 3.12 module-level synchronous functions. The target func
 - Names, constants, attribute and subscript access, calls, boolean operations, comparisons, and unary and binary operations within those statements.
 - A function docstring and `pass`, which produce no behavioral claims.
 
-Recognizing syntax does not mean Saga understands all of its Python semantics. The POC follows these rules:
+Syntax support is wider than semantic support. The POC follows these rules:
 
 - Local-name reads and writes use lexical scope within the target function.
 - `if` branches and `for` loops receive conservative control-flow edges. Loop analysis may over-approximate dependencies.
 - Guard conditions are preserved structurally. Operators are not assumed to have builtin behavior unless the claim records that assumption.
-- Calls are opaque unless a small, explicit registry provides a may-effect summary. Construction of a modeled builtin exception in a `raise` statement is handled by the guard analysis.
+- Calls are opaque unless a small, explicit registry or a bounded module-local summary provides relevant behavior. Construction of a modeled builtin exception in a `raise` statement is handled by the guard analysis.
 - Attribute and subscript assignments are reported as attempted write operations. They also produce a boundary for assignment-hook behavior unless Saga can establish modeled builtin semantics. They do not prove that ordinary mutation occurred because descriptors, `__setattr__`, and `__setitem__` may run arbitrary code.
 - An `assert`-based claim records the assumption that `__debug__` is true. Python may remove assertions when run with optimization.
 
@@ -88,7 +96,7 @@ Any other statement or expression produces a diagnostic and suppresses claims th
 
 All surfaces consume the same structured result. Renderers may shorten a claim but cannot strengthen or reinterpret it.
 
-The first schema needs these parts:
+The schema has these parts:
 
 ```python
 class EvidenceCard:
@@ -120,7 +128,7 @@ class Boundary:
     source_span: SourceSpan
 ```
 
-Choose the Python representation during implementation. The serialized form must be versioned, and unstructured prose cannot be its source of truth.
+The Python representation may change. The serialized form must remain versioned, and unstructured prose cannot become its source of truth.
 
 The POC has two evidence classes:
 
@@ -133,7 +141,7 @@ The POC claim kinds are rejected input, explicit exception, attempted write, kno
 
 ## Vertical slices
 
-Each slice ends in behavior a developer can see. Infrastructure belongs inside the first slice that uses it.
+Slices 0 through 6 record the first build. Each slice ends in behavior a developer can see. Infrastructure belongs inside the first slice that uses it.
 
 ### Slice 0: validate the evidence-card interaction
 
@@ -291,9 +299,9 @@ Each slice ends in behavior a developer can see. Infrastructure belongs inside t
 4. Implement the initial observation templates and suppression rules.
 5. Render observed evidence in the CLI and editor.
 
-### Slice 6: complete and evaluate the POC
+### Slice 6: integrate and dogfood the first POC
 
-**Outcome:** The real analyzer drives the complete editor demo, followed by a developer evaluation.
+**Outcome:** The real analyzer drives the complete editor demo and exposes the gaps that block a useful developer evaluation.
 
 **Demo:** Run the full flow described in "The demo" from a clean checkout, including a source edit and refreshed card.
 
@@ -303,9 +311,9 @@ Each slice ends in behavior a developer can see. Infrastructure belongs inside t
 - After a warm-up run, the complete static card refreshes within one second on the recorded evaluation machine for the fixture target. Record median and p95 latency across at least 20 runs.
 - Analysis failures appear as diagnostics without breaking unrelated claims.
 - The demo runs from documented setup commands on a clean machine or reproducible environment.
-- At least five developers perform concrete unfamiliar-code tasks with and without the evidence card.
-- We record completion time, answer correctness, which claims were opened, misleading output, and qualitative feedback.
-- The POC findings produce a written go, revise, or stop decision.
+- Saga is run against non-curated functions as well as the demo fixture.
+- The findings record correctness failures, noisy output, unclear claims, and rough editor interactions.
+- The POC findings produce a written `go`, `revise`, or `stop` decision.
 
 **Not included:** Production hardening or features added solely to make the demo look broader.
 
@@ -314,8 +322,20 @@ Each slice ends in behavior a developer can see. Infrastructure belongs inside t
 1. Build the final fixture and scripted demo path.
 2. Add refresh behavior and basic analysis caching.
 3. Harden partial-failure diagnostics.
-4. Run the POC evaluation sessions.
+4. Dogfood the card on non-curated functions.
 5. Write the POC decision memo.
+
+### Capability revision
+
+The next work stays on the function card and stops well short of a general Python analyzer.
+
+1. Make claims answer the question directly. Render guards, return paths, mutations, and failures in terms a developer can scan without decoding AST-shaped data.
+2. Reduce boundary noise without hiding uncertainty. Group repeated low-signal calls and keep external, dynamic, or behavior-changing boundaries prominent.
+3. Follow one module-local call when it materially improves a card. Reuse the same evidence rules, stop at recursion or unsupported dispatch, and show the call chain behind propagated facts.
+4. Report explicit exceptions that can escape the selected function, including exceptions propagated through a supported local summary.
+5. Add focused views for return dependencies, mutations, failures, and analysis boundaries. These views operate on Saga's structured evidence and do not accept natural-language claims.
+
+Dogfood each slice on real functions that were not written to flatter the analyzer. Keep examples that expose failure modes in the test suite.
 
 ## Slice dependency order
 
@@ -327,14 +347,20 @@ Slice 1: real function inspection
     |
     +--> Slice 2: guards and failures ----+
     |                                     |
-    +--> Slice 3: effects and boundaries -+--> Slice 6: integrated demo
+    +--> Slice 3: effects and boundaries -+--> Slice 6: integration and dogfooding
     |                                     |
     +--> Slice 4: return dependencies ----+
     |                                     |
     +--> Slice 5: observed evidence ------+
+                                          |
+                                          v
+                              capability revision slices
+                                          |
+                                          v
+                                developer evaluation
 ```
 
-After Slice 1, Slices 2 through 5 can proceed independently against the shared schema. That does not mean they should all start at once. Complete and evaluate the smallest useful combination first.
+After Slice 1, Slices 2 through 5 can proceed independently against the shared schema. Finish and evaluate the smallest useful combination before starting more work.
 
 ## Issue extraction rules
 
@@ -347,7 +373,7 @@ When moving this plan to GitHub:
 - Copy acceptance criteria into issues as checkboxes and preserve exclusions.
 - Link each ticket to its slice and to the POC demo.
 - Close or rewrite downstream tickets when an earlier slice invalidates their assumptions.
-- Do not create tickets for post-POC ideas until the POC decision is `go`.
+- During the `revise` phase, create tickets only for capability gaps observed while dogfooding the function card.
 
 ## POC completion
 
@@ -359,10 +385,11 @@ The POC is done when:
 - Unsupported behavior is visible and specific.
 - The CLI and editor agree because they render the same structured result.
 - The complete demo works from a clean setup.
-- Developer sessions provide enough evidence for an explicit go, revise, or stop decision.
+- Dogfooding shows that the card can answer concrete questions on non-curated functions without obvious correctness failures or boundary overload.
+- Developer sessions then provide enough evidence for an explicit `go`, `revise`, or `stop` decision.
 
 Completion does not require package-wide analysis, CI, pull-request integration, coding-agent integration, concept assignment, rationale inference, or publication-quality documentation.
 
 ## After the POC
 
-Create a later-work document only after a `go` decision. Base it on the evaluation rather than the old speculative roadmap. Possible work includes package-scale analysis, pull-request findings, coding-agent context, and richer effect or call summaries. None of it is committed until developers show that the function card saves real tracing work.
+Create a later-work document only after a `go` decision. Base it on what developers did with the card, not the old speculative roadmap. Package-scale analysis, pull-request findings, and coding-agent context can wait until the function card saves real tracing work.
