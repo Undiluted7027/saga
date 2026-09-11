@@ -1,5 +1,10 @@
 .venv/
+.saga/
 .agents/
 .claude/
 skills-lock.json
 .firecrawl
+AGENTS.md
+
+__pycache__/
+*.egg-info

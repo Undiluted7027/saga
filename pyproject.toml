@@ -5,3 +5,16 @@ description = "Saga: evidence-backed Python code intelligence"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=8,<9"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project.scripts]
+saga = "saga.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["saga*"]

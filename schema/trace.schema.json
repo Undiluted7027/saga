@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://saga.dev/schema/trace-0.1.json",
+  "title": "Saga test trace",
+  "type": "object",
+  "required": ["trace_schema_version", "target", "environment", "executions"],
+  "properties": {
+    "trace_schema_version": { "const": "0.1" },
+    "target": { "type": "object", "required": ["path", "qualified_name"], "properties": { "path": { "type": "string" }, "qualified_name": { "type": "string" } } },
+    "environment": { "type": "object", "required": ["python_version", "platform"], "properties": { "python_version": { "type": "string" }, "platform": { "type": "string" } } },
+    "executions": { "type": "array", "items": { "type": "object", "required": ["test_id", "input", "outcome"], "properties": { "test_id": { "type": "string" }, "input": { "type": "object" }, "outcome": { "enum": ["return", "raise"] }, "return": {}, "exception": { "type": "object" } } } }
+  }
+}

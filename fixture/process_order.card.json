@@ -1,0 +1,24 @@
+{
+  "schema_version": "0.1",
+  "target": {
+    "path": "fixture/process_order.py",
+    "qualified_name": "process_order",
+    "name": "process_order",
+    "signature": "process_order(order, account, payment_gateway)",
+    "status": "supported",
+    "source_span": { "path": "fixture/process_order.py", "start_line": 1, "start_column": 0, "end_line": 8, "end_column": 18 }
+  },
+  "claims": [
+    { "id": "guard-items", "kind": "rejected_input", "statement": { "text": "Rejects orders with no items." }, "evidence": { "method": "entry_guard", "evidence_class": "derived", "detail": { "condition": "not order.items", "exit": "raises ValueError" } }, "source_spans": [{ "path": "fixture/process_order.py", "start_line": 2, "start_column": 4, "end_line": 3, "end_column": 48 }], "assumptions": [], "boundary_ids": [] },
+    { "id": "exception-value-error", "kind": "explicit_exception", "statement": { "text": "Raises ValueError when the order has no items." }, "evidence": { "method": "explicit_raise", "evidence_class": "derived", "detail": { "exception": "ValueError" } }, "source_spans": [{ "path": "fixture/process_order.py", "start_line": 2, "start_column": 4, "end_line": 3, "end_column": 48 }], "assumptions": [], "boundary_ids": [] },
+    { "id": "return-subtotal", "kind": "return_dependency", "statement": { "text": "Return may depend on subtotal and item prices." }, "evidence": { "method": "fixture_slice", "evidence_class": "derived", "detail": { "dependencies": ["subtotal", "item.price"] } }, "source_spans": [{ "path": "fixture/process_order.py", "start_line": 4, "start_column": 4, "end_line": 4, "end_column": 52 }, { "path": "fixture/process_order.py", "start_line": 8, "start_column": 4, "end_line": 8, "end_column": 18 }], "assumptions": [], "boundary_ids": [] },
+    { "id": "write-status", "kind": "attempted_write", "statement": { "text": "Attempts to write order.status = 'ready'." }, "evidence": { "method": "syntactic_write", "evidence_class": "derived", "detail": { "target": "order.status" } }, "source_spans": [{ "path": "fixture/process_order.py", "start_line": 5, "start_column": 4, "end_line": 5, "end_column": 27 }], "assumptions": [], "boundary_ids": ["boundary-status-hook"] },
+    { "id": "effect-charge", "kind": "known_effect", "statement": { "text": "May charge the payment gateway." }, "evidence": { "method": "fixture_effect_registry", "evidence_class": "derived", "detail": { "effect": "payment_gateway.charge" } }, "source_spans": [{ "path": "fixture/process_order.py", "start_line": 6, "start_column": 4, "end_line": 6, "end_column": 44 }], "assumptions": [], "boundary_ids": ["boundary-payment-gateway"] },
+    { "id": "observation-nonnegative", "kind": "test_observation", "statement": { "text": "Observed a non-negative numeric return across 3 distinct inputs." }, "evidence": { "method": "pytest_boundary_trace", "evidence_class": "observed", "detail": { "support": 3, "domain": "subtotal values 10–85", "tests": ["test_process_order_basic", "test_process_order_discounted"] } }, "source_spans": [{ "path": "fixture/process_order.py", "start_line": 8, "start_column": 4, "end_line": 8, "end_column": 18 }], "assumptions": [], "boundary_ids": [] }
+  ],
+  "boundaries": [
+    { "id": "boundary-status-hook", "kind": "assignment_hooks", "target": { "text": "order.status" }, "reason": "A descriptor or __setattr__ implementation may execute arbitrary code.", "source_span": { "path": "fixture/process_order.py", "start_line": 5, "start_column": 4, "end_line": 5, "end_column": 27 } },
+    { "id": "boundary-payment-gateway", "kind": "unresolved_call", "target": { "text": "payment_gateway.charge(...)" }, "reason": "The callee is outside the fixture model and may affect behavior.", "source_span": { "path": "fixture/process_order.py", "start_line": 6, "start_column": 4, "end_line": 6, "end_column": 44 } }
+  ],
+  "diagnostics": []
+}

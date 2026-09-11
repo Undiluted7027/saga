@@ -1,0 +1,32 @@
+{
+  "name": "saga-vscode",
+  "displayName": "Saga Evidence Card",
+  "description": "Evidence cards for Python functions.",
+  "version": "0.1.0",
+  "private": true,
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other"],
+  "activationEvents": ["onLanguage:python"],
+  "main": "extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "saga.openEvidenceCard", "title": "Saga: Open Evidence Card" },
+      { "command": "saga.runTests", "title": "Saga: Run Tests for Current Function" }
+    ],
+    "configuration": {
+      "properties": {
+        "saga.fixturePath": {
+          "type": "string",
+          "description": "Optional path to a serialized Saga evidence card fixture."
+        },
+        "saga.pytestArgs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Additional arguments passed to pytest when collecting test observations."
+        }
+      }
+    }
+  },
+  "scripts": { "test": "node --test test/*.test.js" }
+}
