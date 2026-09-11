@@ -159,6 +159,13 @@ class InspectFunctionTests(unittest.TestCase):
         card = inspect_function(path, "fail")
         self.assertFalse([boundary for boundary in card["boundaries"] if boundary["kind"] == "unresolved_call"])
 
+    def test_late_guard_is_a_control_dependency_of_the_return(self):
+        path = self.write("def f(amount):\n    total = amount\n    if amount <= 0:\n        raise ValueError()\n    result = total * 2\n    return result\n")
+        card = inspect_function(path, "f")
+        claim = next(claim for claim in card["claims"] if claim["kind"] == "return_dependency")
+        lines = {span["start_line"] for span in claim["source_spans"]}
+        self.assertIn(3, lines)
+
 
 if __name__ == "__main__":
     unittest.main()

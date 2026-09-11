@@ -86,6 +86,7 @@ class _CFGBuilder:
         self.nodes: dict[int, CFGNode] = {}
         self.next_id = 0
         self.diagnostics: list[dict[str, Any]] = []
+        self.gates_next: dict[int, bool] = {}
 
     def node(self, statement: ast.stmt, controls: list[int]) -> int:
         """Create one CFG node with lexical reads, definitions, and controllers."""
@@ -112,7 +113,7 @@ class _CFGBuilder:
             for previous in exits:
                 self.edge(previous, entry)
             exits = statement_exits
-            if isinstance(statement, ast.Assert):
+            if isinstance(statement, ast.Assert) or self.gates_next.get(entry, False):
                 active_controls.append(entry)
         return first, exits
 
@@ -122,6 +123,8 @@ class _CFGBuilder:
         if isinstance(statement, ast.If):
             body_first, body_exits = self.block(statement.body, [*controls, current])
             else_first, else_exits = self.block(statement.orelse, [*controls, current])
+            body_terminates = body_first is not None and not body_exits
+            else_terminates = else_first is not None and not else_exits
             if body_first is not None:
                 self.edge(current, body_first)
             else:
@@ -130,6 +133,7 @@ class _CFGBuilder:
                 self.edge(current, else_first)
             else:
                 else_exits = {current}
+            self.gates_next[current] = body_terminates != else_terminates
             return current, body_exits | else_exits
         if isinstance(statement, ast.For):
             body_first, body_exits = self.block(statement.body, [*controls, current])
