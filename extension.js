@@ -2,7 +2,7 @@ const vscode = require('vscode');
 const cp = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-const { targetNameFromLine, validateCard, claimPresentation, boundaryGroups, hoverLines } = require('./card');
+const { targetNameFromLine, validateCard, claimPresentation, focusCard, viewPresentation, boundaryGroups, hoverLines } = require('./card');
 
 const staticCardCache = new Map();
 
@@ -77,6 +77,7 @@ async function navigate(span, context) {
 function panelHtml(card, panel) {
   /** Render the shared structured result as a navigable webview document. */
   const esc = (value) => String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const view = viewPresentation(card);
   const renderCallChain = (chain) => chain?.length ? `<details><summary>Local call chain</summary><ol>${chain.map((link) => { const bindings = link.argument_bindings.length ? ` (${link.argument_bindings.map((item) => `${item.parameter} = ${item.argument}`).join(', ')})` : ''; return `<li>${esc(link.caller)} → ${esc(link.callee)}${esc(bindings)} · <a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(link.call_site))}">call</a> · <a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(link.callee_span))}">callee</a></li>`; }).join('')}</ol></details>` : '';
   const renderClaims = (claims) => claims.map((claim) => {
     const view = claimPresentation(claim);
@@ -115,24 +116,41 @@ function panelHtml(card, panel) {
     const chain = renderCallChain(diagnostic.call_chain);
     return `<article class="diagnostic"><h3>${esc(diagnostic.kind)}</h3><p>${esc(diagnostic.message)}${source}</p>${chain}</article>`;
   }).join('');
-  const target = encodeURIComponent(JSON.stringify({ path: card.target.path, name: card.target.name }));
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${panel.webview.cspSource};"><style>body{font-family:var(--vscode-font-family);padding:0 2em;line-height:1.45}h1{font-size:1.35em}h3{margin-bottom:.25em;text-transform:capitalize}article{border-top:1px solid var(--vscode-panel-border);padding:.7em 0}em{font-size:.75em;font-weight:normal;background:var(--vscode-textBlockQuote-background);padding:.15em .4em}.boundary{border-left:3px solid var(--vscode-editorWarning-foreground);padding-left:1em}.diagnostic{border-left:3px solid var(--vscode-editorError-foreground);padding-left:1em}small{display:block;color:var(--vscode-descriptionForeground)}pre{white-space:pre-wrap}</style></head><body><h1>${esc(card.target.name)}</h1><p><code>${esc(card.target.signature)}</code></p><p><a href="command:saga.runTests?${target}">Run tests for this function</a></p><h2>Derived claims</h2>${derivedClaims || '<p>None</p>'}<h2>Observed claims</h2>${observedClaims || '<p>None</p>'}<h2>Boundaries</h2>${boundaries || '<p>None</p>'}<h2>Diagnostics</h2>${diagnostics || '<p>None</p>'}</body></html>`;
+  const request = (name) => encodeURIComponent(JSON.stringify({ path: card.target.path, name: card.target.name, view: name }));
+  const navigation = `<nav><a href="command:saga.openEvidenceCard?${request('full')}">Full card</a> · <a href="command:saga.openEvidenceCard?${request('return')}">Return</a> · <a href="command:saga.openEvidenceCard?${request('mutation')}">Mutation</a> · <a href="command:saga.openEvidenceCard?${request('failure')}">Failure</a> · <a href="command:saga.openEvidenceCard?${request('boundary')}">Boundaries</a></nav>`;
+  const empty = view.empty ? `<p class="empty">${esc(view.emptyMessage)}</p>` : '';
+  const fullContent = `<h2>Derived claims</h2>${derivedClaims || '<p>None</p>'}<h2>Observed claims</h2>${observedClaims || '<p>None</p>'}<h2>Boundaries</h2>${boundaries || '<p>None</p>'}<h2>Diagnostics</h2>${diagnostics || '<p>None</p>'}`;
+  const focusedClaims = view.name === 'boundary' ? '' : `<h2>${esc(view.label)}</h2>${empty || renderClaims(card.claims)}`;
+  const focusedBoundaries = `<h2>${view.name === 'boundary' ? 'Analysis boundaries' : 'Related boundaries'}</h2>${view.name === 'boundary' && empty ? empty : boundaries || '<p>None limit this evidence.</p>'}`;
+  const focusedDiagnostics = diagnostics ? `<h2>Target diagnostics</h2>${diagnostics}` : '';
+  const content = view.name === 'full' ? fullContent : focusedClaims + focusedBoundaries + focusedDiagnostics;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${panel.webview.cspSource};"><style>body{font-family:var(--vscode-font-family);padding:0 2em;line-height:1.45}h1{font-size:1.35em}h3{margin-bottom:.25em;text-transform:capitalize}nav{margin:.8em 0}.empty{border-left:3px solid var(--vscode-editorWarning-foreground);padding:.6em 1em}article{border-top:1px solid var(--vscode-panel-border);padding:.7em 0}em{font-size:.75em;font-weight:normal;background:var(--vscode-textBlockQuote-background);padding:.15em .4em}.boundary{border-left:3px solid var(--vscode-editorWarning-foreground);padding-left:1em}.diagnostic{border-left:3px solid var(--vscode-editorError-foreground);padding-left:1em}small{display:block;color:var(--vscode-descriptionForeground)}pre{white-space:pre-wrap}</style></head><body><h1>${esc(card.target.name)} · ${esc(view.label)}</h1><p><code>${esc(card.target.signature)}</code></p>${navigation}<p><a href="command:saga.runTests?${request(view.name)}">Run tests for this function</a></p>${content}</body></html>`;
 }
 
 const evidencePanels = new Map();
 
-function showCardPanel(context, card, document, name) {
+function showCardPanel(context, card, document, name, view = 'full') {
   /** Keep an evidence panel current after the source file is saved. */
   const key = `${document.uri.toString()}::${name}`;
   const existing = evidencePanels.get(key);
   if (existing) {
     existing.panel.reveal(vscode.ViewColumn.Beside, false);
+    existing.setView(view);
     existing.render(card);
     return existing.panel;
   }
-  const panel = vscode.window.createWebviewPanel('sagaEvidenceCard', 'Saga Evidence Card', vscode.ViewColumn.Beside, { enableScripts: false, enableCommandUris: ['saga.navigate', 'saga.runTests'] });
+  const panel = vscode.window.createWebviewPanel('sagaEvidenceCard', 'Saga Evidence Card', vscode.ViewColumn.Beside, { enableScripts: false, enableCommandUris: ['saga.navigate', 'saga.runTests', 'saga.openEvidenceCard'] });
   let refreshTimer;
-  const render = (nextCard) => { panel.webview.html = panelHtml(nextCard, panel); };
+  let activeView = view;
+  let latestCard = card;
+  const render = (nextCard) => {
+    latestCard = nextCard;
+    panel.title = `Saga: ${viewPresentation(focusCard(nextCard, activeView)).label}`;
+    panel.webview.html = panelHtml(focusCard(nextCard, activeView), panel);
+  };
+  const setView = (nextView) => {
+    activeView = nextView;
+  };
   const refresh = async () => {
     try {
       render(await requestCard(context, document, name, true));
@@ -152,7 +170,7 @@ function showCardPanel(context, card, document, name) {
     saveSubscription.dispose();
     clearTimeout(refreshTimer);
   });
-  evidencePanels.set(key, { panel, render });
+  evidencePanels.set(key, { panel, render, setView });
   render(card);
   return panel;
 }
@@ -180,7 +198,7 @@ function activate(context) {
     let card;
     try { card = await requestCard(context, document, name); }
     catch (error) { return vscode.window.showErrorMessage('Saga inspection failed: ' + error.message); }
-    showCardPanel(context, card, document, name);
+    showCardPanel(context, card, document, name, request?.view || 'full');
   });
   const runTests = vscode.commands.registerCommand('saga.runTests', async (request) => {
     const activeEditor = vscode.window.activeTextEditor;
@@ -192,10 +210,35 @@ function activate(context) {
     let card;
     try { card = await requestTestCard(context, document, name); }
     catch (error) { return vscode.window.showErrorMessage('Saga test run failed: ' + error.message); }
-    showCardPanel(context, card, document, name);
+    showCardPanel(context, card, document, name, request?.view || 'full');
   });
+  const openReturn = vscode.commands.registerCommand(
+    'saga.openReturnEvidence',
+    () => vscode.commands.executeCommand('saga.openEvidenceCard', { view: 'return' })
+  );
+  const openMutation = vscode.commands.registerCommand(
+    'saga.openMutationEvidence',
+    () => vscode.commands.executeCommand('saga.openEvidenceCard', { view: 'mutation' })
+  );
+  const openFailure = vscode.commands.registerCommand(
+    'saga.openFailureEvidence',
+    () => vscode.commands.executeCommand('saga.openEvidenceCard', { view: 'failure' })
+  );
+  const openBoundaries = vscode.commands.registerCommand(
+    'saga.openBoundaryEvidence',
+    () => vscode.commands.executeCommand('saga.openEvidenceCard', { view: 'boundary' })
+  );
   const navigateCommand = vscode.commands.registerCommand('saga.navigate', (span) => navigate(span, context));
-  context.subscriptions.push(provider, open, runTests, navigateCommand);
+  context.subscriptions.push(
+    provider,
+    open,
+    openReturn,
+    openMutation,
+    openFailure,
+    openBoundaries,
+    runTests,
+    navigateCommand
+  );
 }
 
 module.exports = { activate, deactivate: () => {} };

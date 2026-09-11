@@ -6,6 +6,7 @@
   "required": ["schema_version", "target", "claims", "boundaries", "diagnostics"],
   "properties": {
     "schema_version": { "const": "0.1" },
+    "view": { "enum": ["return", "mutation", "failure", "boundary"] },
     "target": { "$ref": "#/$defs/target" },
     "claims": { "type": "array", "items": { "$ref": "#/$defs/claim" } },
     "boundaries": { "type": "array", "items": { "$ref": "#/$defs/boundary" } },

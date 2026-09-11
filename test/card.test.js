@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { loadCard, targetNameFromLine, validateCard, claimPresentation, boundaryGroups, hoverLines } = require('../card');
+const { loadCard, targetNameFromLine, validateCard, claimPresentation, focusCard, viewPresentation, boundaryGroups, hoverLines } = require('../card');
 
 test('fixture validates against the evidence-card contract', () => {
   const card = loadCard();
@@ -24,7 +24,7 @@ test('fixture exercises every Slice 0 result kind', () => {
 test('hover stays compact and leaves details for the panel', () => {
   const lines = hoverLines(loadCard());
   assert.ok(lines.length <= 6, `hover has ${lines.length} lines`);
-  assert.match(lines.at(-1), /Open detailed evidence card/);
+  assert.match(lines.at(-1), /Full.*Return.*Mutation.*Failure.*Boundaries/);
   assert.ok(lines.some((line) => line.includes('Observed')));
   assert.ok(lines.some((line) => line.includes('Boundary')));
   assert.ok(lines.some((line) => line.includes('order.items is falsy')));
@@ -85,6 +85,61 @@ test('editor keeps different stop reasons and boundary classes separate', () => 
     'module_local',
     'routine_call'
   ]);
+});
+
+test('editor focused views retain claim identity and related boundaries', () => {
+  const card = loadCard();
+  for (const [view, kinds] of [
+    ['return', ['return_dependency']],
+    ['mutation', ['attempted_write', 'known_effect']],
+    ['failure', ['rejected_input', 'explicit_exception']]
+  ]) {
+    const focused = focusCard(card, view);
+    assert.deepEqual([...new Set(focused.claims.map((claim) => claim.kind))].sort(), kinds.sort());
+    for (const claim of focused.claims) {
+      assert.equal(card.claims.find((item) => item.id === claim.id), claim);
+      assert.deepEqual(card.claims.find((item) => item.id === claim.id).source_spans, claim.source_spans);
+    }
+    const related = new Set(focused.claims.flatMap((claim) => claim.boundary_ids));
+    assert.deepEqual(new Set(focused.boundaries.map((item) => item.id)), related);
+  }
+});
+
+test('editor boundary and empty views do not imply completeness', () => {
+  const card = loadCard();
+  const boundary = focusCard(card, 'boundary');
+  assert.equal(boundary.claims.length, 0);
+  assert.deepEqual(boundary.boundaries, card.boundaries);
+
+  const empty = focusCard({ ...card, claims: [], boundaries: [] }, 'failure');
+  const presentation = viewPresentation(empty);
+  assert.equal(presentation.empty, true);
+  assert.match(presentation.emptyMessage, /does not establish/);
+  assert.match(presentation.emptyMessage, /cannot fail/);
+});
+
+test('full editor view returns the original card', () => {
+  const card = loadCard();
+  assert.equal(focusCard(card, 'full'), card);
+});
+
+test('focused editor view keeps analysis diagnostics', () => {
+  const card = loadCard();
+  card.target.status = 'unsupported';
+  card.diagnostics = [{ kind: 'unsupported_target', message: 'Async target.' }];
+  assert.equal(focusCard(card, 'return').diagnostics[0].kind, 'unsupported_target');
+  card.target.status = 'supported';
+  card.diagnostics = [{ kind: 'unsupported_syntax', message: 'Unsupported statement.' }];
+  assert.equal(focusCard(card, 'return').diagnostics[0].kind, 'unsupported_syntax');
+});
+
+test('extension contributes all four focused view actions', () => {
+  const manifest = JSON.parse(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'package.json'), 'utf8'));
+  const commands = new Set(manifest.contributes.commands.map((item) => item.command));
+  assert.ok(commands.has('saga.openReturnEvidence'));
+  assert.ok(commands.has('saga.openMutationEvidence'));
+  assert.ok(commands.has('saga.openFailureEvidence'));
+  assert.ok(commands.has('saga.openBoundaryEvidence'));
 });
 
 test('invalid cards produce actionable validation errors', () => {

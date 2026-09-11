@@ -11,6 +11,10 @@
   "contributes": {
     "commands": [
       { "command": "saga.openEvidenceCard", "title": "Saga: Open Evidence Card" },
+      { "command": "saga.openReturnEvidence", "title": "Saga: Inspect Return Dependencies" },
+      { "command": "saga.openMutationEvidence", "title": "Saga: Inspect Mutations and Effects" },
+      { "command": "saga.openFailureEvidence", "title": "Saga: Inspect Failures" },
+      { "command": "saga.openBoundaryEvidence", "title": "Saga: Inspect Analysis Boundaries" },
       { "command": "saga.runTests", "title": "Saga: Run Tests for Current Function" }
     ],
     "configuration": {

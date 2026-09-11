@@ -1,6 +1,29 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
+const VIEW_CLAIMS = {
+  return: new Set(['return_dependency']),
+  mutation: new Set(['attempted_write', 'known_effect']),
+  failure: new Set(['rejected_input', 'explicit_exception']),
+  boundary: new Set()
+};
+
+const VIEW_LABELS = {
+  full: 'Full evidence card',
+  return: 'Return dependencies',
+  mutation: 'Mutations and effects',
+  failure: 'Failures',
+  boundary: 'Analysis boundaries'
+};
+
+const EMPTY_MESSAGES = {
+  full: 'Saga produced no claims or boundaries for this function.',
+  return: 'Saga found no supported return-dependency evidence. This does not establish that the function cannot return or that its return is independent of other values.',
+  mutation: 'Saga found no supported mutation or known-effect evidence. This does not establish that the function is pure or cannot change state.',
+  failure: 'Saga found no supported rejected-input or explicit-exception evidence. This does not establish that the function cannot fail or raise an exception.',
+  boundary: 'Saga recorded no analysis boundaries for this function. This does not establish complete analysis. Check the full card for diagnostics.'
+};
+
 function loadCard(filePath = path.join(__dirname, 'fixture', 'process_order.card.json')) {
   /** Load one serialized card; Slice 0 keeps this deterministic fixture path. */
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -43,6 +66,31 @@ function claimPresentation(claim) {
     condition: claim.statement.condition,
     handlerSpans: claim.statement.handler_spans || [],
     callChain: claim.call_chain || [],
+  };
+}
+
+function focusCard(card, view = 'full') {
+  /** Return a fixed projection while retaining the original evidence objects. */
+  if (view === 'full') return card;
+  const allowed = VIEW_CLAIMS[view];
+  if (!allowed) throw new Error(`Unknown Saga view: ${view}`);
+  const claims = card.claims.filter((claim) => allowed.has(claim.kind));
+  const relatedIds = new Set(claims.flatMap((claim) => claim.boundary_ids));
+  const boundaries = view === 'boundary'
+    ? [...card.boundaries]
+    : card.boundaries.filter((boundary) => relatedIds.has(boundary.id));
+  return { ...card, view, claims, boundaries, diagnostics: [...card.diagnostics] };
+}
+
+function viewPresentation(card) {
+  /** Describe the active view and its honest empty state. */
+  const view = card.view || 'full';
+  const empty = view === 'boundary' ? card.boundaries.length === 0 : card.claims.length === 0;
+  return {
+    name: view,
+    label: VIEW_LABELS[view],
+    empty,
+    emptyMessage: empty ? EMPTY_MESSAGES[view] : undefined
   };
 }
 
@@ -121,9 +169,15 @@ function hoverLines(card) {
       lines.push('- [' + label + '](command:saga.navigate?' + span + '): ' + text);
     }
   }
-  const target = encodeURIComponent(JSON.stringify({ path: card.target.path, name: card.target.name }));
-  lines.push('[Open detailed evidence card](command:saga.openEvidenceCard?' + target + ')');
+  const request = (view) => encodeURIComponent(JSON.stringify({ path: card.target.path, name: card.target.name, view }));
+  lines.push(
+    `[Full](command:saga.openEvidenceCard?${request('full')}) · ` +
+    `[Return](command:saga.openEvidenceCard?${request('return')}) · ` +
+    `[Mutation](command:saga.openEvidenceCard?${request('mutation')}) · ` +
+    `[Failure](command:saga.openEvidenceCard?${request('failure')}) · ` +
+    `[Boundaries](command:saga.openEvidenceCard?${request('boundary')})`
+  );
   return lines;
 }
 
-module.exports = { loadCard, targetNameFromLine, validateCard, claimPresentation, boundaryGroups, hoverLines };
+module.exports = { loadCard, targetNameFromLine, validateCard, claimPresentation, focusCard, viewPresentation, boundaryGroups, hoverLines };

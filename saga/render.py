@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from .boundaries import group_boundaries
+from .views import EMPTY_MESSAGES, VIEW_LABELS, view_is_empty
 
 
 def _compact_domain(domain: Any) -> str:
@@ -75,6 +76,12 @@ def terminal(
     """Render the structured card for concise terminal inspection."""
     target = card["target"]
     lines = [f"{target['qualified_name']} {target['status']}", f"  {target['path']}:{target['source_span']['start_line'] if target['source_span'] else '?'}", f"  {target['signature'] or '(signature unavailable)'}", f"  Claims: {len(card['claims'])}"]
+    view = card.get("view", "full")
+    if view != "full":
+        lines.insert(3, f"  View: {VIEW_LABELS[view]}")
+        lines.insert(4, "  Full card: omit --view.")
+        if view_is_empty(card):
+            lines.insert(5, f"  {EMPTY_MESSAGES[view]}")
     for claim in card["claims"]:
         statement = claim["statement"]
         label = statement.get("type", claim["kind"])
@@ -117,8 +124,10 @@ def terminal(
     important_groups = [group for group in groups if group["category"] != "routine"]
     routine_groups = [group for group in groups if group["category"] == "routine"]
     group_label = "group" if len(groups) == 1 else "groups"
+    site_label = "site" if len(card["boundaries"]) == 1 else "sites"
     lines.append(
-        f"  Boundaries: {len(card['boundaries'])} sites in {len(groups)} {group_label}"
+        f"  Boundaries: {len(card['boundaries'])} {site_label} in "
+        f"{len(groups)} {group_label}"
     )
     for group in important_groups:
         _boundary_group(lines, group, show_sites=show_boundary_sites)

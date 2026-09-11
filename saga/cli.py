@@ -9,6 +9,7 @@ import sys
 from .inspect import inspect_function
 from .render import terminal
 from .testing import run_tests
+from .views import focus_card
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -25,6 +26,12 @@ def main(argv: list[str] | None = None) -> int:
     inspect_parser.add_argument("selector", help="target in the form path.py::qualified_name")
     inspect_parser.add_argument("--format", choices=("json", "terminal"), default="json")
     inspect_parser.add_argument(
+        "--view",
+        choices=("full", "return", "mutation", "failure", "boundary"),
+        default="full",
+        help="show one fixed evidence view without changing analysis",
+    )
+    inspect_parser.add_argument(
         "--show-routine-boundaries",
         action="store_true",
         help="expand groups of routine unresolved calls in terminal output",
@@ -37,6 +44,12 @@ def main(argv: list[str] | None = None) -> int:
     test_parser = subparsers.add_parser("test", help="run pytest with selected-target instrumentation")
     test_parser.add_argument("selector", help="target in the form path.py::qualified_name")
     test_parser.add_argument("--format", choices=("json", "terminal"), default="json")
+    test_parser.add_argument(
+        "--view",
+        choices=("full", "return", "mutation", "failure", "boundary"),
+        default="full",
+        help="show one fixed evidence view without changing analysis",
+    )
     test_parser.add_argument("--trace-output", default=".saga/trace.json")
     test_parser.add_argument(
         "--show-routine-boundaries",
@@ -57,6 +70,7 @@ def main(argv: list[str] | None = None) -> int:
         exit_code = 1 if card["diagnostics"] else 0
     else:
         card, exit_code = run_tests(args.selector, pytest_args, args.trace_output)
+    card = focus_card(card, args.view)
     if args.format == "json":
         print(json.dumps(card, indent=2, sort_keys=True))
     else:

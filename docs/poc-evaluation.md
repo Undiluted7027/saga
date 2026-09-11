@@ -125,6 +125,32 @@ Grouping fixes repetition, not every form of noise. `evaluate_observations`
 still has several unique prominent boundaries. Those are separate analysis
 gaps rather than copies of the same warning, so this slice leaves them visible.
 
+### Focused evidence views (#9)
+
+Dogfooded on 2026-09-11 against `evaluate_observations` in
+`saga/observations.py`, `run_tests` in `saga/testing.py`, and `terminal` in
+`saga/render.py`.
+
+The editor and CLI now expose fixed return, mutation, failure, and boundary
+views. They filter the existing card rather than rerunning analysis. Retained
+claims keep their IDs, source spans, and evidence details. A focused claim also
+keeps the boundaries named by that claim; the boundary view shows every raw
+boundary. Diagnostics remain visible so a focused view cannot hide analysis
+failure. Empty views say only that Saga found no supported evidence and point
+back to the full card.
+
+The mutation and failure views cut the `run_tests` terminal card from 144 lines
+to 14 and 19 lines. Each left the relevant claim and its limiting boundary in
+place. The boundary view for `terminal` was 23 lines and removed unrelated
+claims.
+
+The return view did not help on `evaluate_observations`: it was 178 lines
+against 180 for the full card. Almost all evidence in that function concerns
+its return, so filtering had little to remove. This is not a filtering failure;
+it shows that dense return evidence still needs a more compact presentation.
+The view is useful for separating questions, but it does not make every answer
+short.
+
 ## Later developer evaluation protocol
 
 Run with at least five developers who did not write Saga. Use two comparable
@@ -150,10 +176,11 @@ fixed.
 Decision: revise
 Evidence summary: The analyzer and editor flow work. Claims are readable and
 Saga can follow one module-local call, report escaping explicit exceptions, and
-group repeated boundaries without deleting their evidence. Some functions still
-have many distinct analysis gaps, and the card has no question-focused views.
-Before external evaluation: Finish the remaining capability slices in
-docs/poc.md and dogfood them outside the fixture directory. Start developer
-sessions when the card can answer useful questions without fixture-specific
-help.
+group repeated boundaries without deleting their evidence. Fixed views now
+separate return, mutation, failure, and boundary questions. Mutation, failure,
+and boundary views reduced scanning in dogfooding; return evidence remained
+nearly as long as the full card on a return-heavy function.
+Before external evaluation: Make dense return evidence easier to scan on
+non-curated functions, then repeat the POC check. Start developer sessions when
+the card can answer useful questions without fixture-specific help.
 ```

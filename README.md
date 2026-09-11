@@ -38,6 +38,11 @@ To inspect the fixture target from the CLI:
 uv run saga inspect fixture/process_order.py::process_order --format terminal
 ```
 
+Add `--view return`, `--view mutation`, `--view failure`, or
+`--view boundary` when one question matters more than the whole card. These are
+fixed filters over the same evidence: claim IDs, source spans, details, and
+limiting boundaries do not change. Omit `--view` to return to the full card.
+
 To add test-observed evidence, install/use the optional test extra and run the
 tests through Saga:
 
@@ -66,4 +71,5 @@ as an extension through the Extension Development Host (`Run Extension`), and
 open `fixture/process_order.py`. Place the cursor on `process_order`, then use
 `Saga: Open Evidence Card`. In the card, choose `Run tests for this function`
 to see derived and observed claims in separate sections. Source links navigate
-back to the supporting code.
+back to the supporting code. The hover, card navigation, and command palette
+also open the four focused views directly.
