@@ -128,6 +128,11 @@ class InspectFunctionTests(unittest.TestCase):
         self.assertEqual(len(effects), 2)
         self.assertNotEqual(effects[0]["source_spans"], effects[1]["source_spans"])
 
+    def test_raising_a_modeled_builtin_exception_is_not_an_unresolved_call(self):
+        path = self.write("def fail(order):\n    order.status = 'failed'\n    raise RuntimeError('stop')\n")
+        card = inspect_function(path, "fail")
+        self.assertFalse([boundary for boundary in card["boundaries"] if boundary["kind"] == "unresolved_call"])
+
 
 if __name__ == "__main__":
     unittest.main()

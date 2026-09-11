@@ -6,6 +6,7 @@ import ast
 from dataclasses import dataclass
 from typing import Any
 
+from .guards import BUILTIN_EXCEPTIONS
 from .inspect import Span, _diagnostic, _span
 
 
@@ -16,7 +17,6 @@ EFFECT_REGISTRY: dict[str, dict[str, str]] = {
     },
 }
 PATH_CONSTRUCTORS = {"pathlib.Path"}
-MODELED_EXCEPTIONS = {"AssertionError", "AttributeError", "FileNotFoundError", "KeyError", "TypeError", "ValueError"}
 
 
 @dataclass
@@ -169,7 +169,7 @@ class _EffectScanner(ast.NodeVisitor):
     def visit_Call(self, node: ast.Call) -> None:
         """Classify a registry-backed call or expose it as an unresolved boundary."""
         canonical = _resolve(node.func, self.aliases)
-        modeled_exception = isinstance(node.func, ast.Name) and node.func.id in MODELED_EXCEPTIONS
+        modeled_exception = isinstance(node.func, ast.Name) and node.func.id in BUILTIN_EXCEPTIONS
         if canonical in EFFECT_REGISTRY:
             effect = EFFECT_REGISTRY[canonical]
             self.result.claims.append(_claim(self.path, node, {"type": "known_effect", "effect": {"kind": effect["kind"], "callee": canonical}}, f"May {effect['description']} via {canonical}."))
