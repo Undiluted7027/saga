@@ -43,9 +43,17 @@ def _claim(path: str, node: ast.AST, statement: dict[str, Any], text: str) -> di
     }
 
 
-def _boundary(path: str, node: ast.AST, kind: str, target: str, reason: str, category: str = "important") -> dict[str, Any]:
+def _boundary(
+    path: str,
+    node: ast.AST,
+    kind: str,
+    target: str,
+    reason: str,
+    category: str = "important",
+    concerns: list[str] | None = None,
+) -> dict[str, Any]:
     """Build a source-linked boundary for behavior the effect model cannot inspect."""
-    return {
+    boundary = {
         "id": f"effect-boundary-{node.lineno}-{node.col_offset}-{kind}",
         "kind": kind,
         "target": {"text": target},
@@ -53,6 +61,9 @@ def _boundary(path: str, node: ast.AST, kind: str, target: str, reason: str, cat
         "category": category,
         "source_span": _span(path, node).as_dict(),
     }
+    if concerns:
+        boundary["concerns"] = concerns
+    return boundary
 
 
 def _call_category(node: ast.Call) -> str:
@@ -62,6 +73,17 @@ def _call_category(node: ast.Call) -> str:
     if isinstance(node.func, ast.Attribute) and node.func.attr in ROUTINE_METHODS:
         return "routine"
     return "important"
+
+
+def _root_name(node: ast.AST) -> str | None:
+    """Return the source-level receiver root for a simple access chain."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return _root_name(node.value)
+    if isinstance(node, ast.Subscript):
+        return _root_name(node.value)
+    return None
 
 
 def _aliases(tree: ast.Module) -> dict[str, str]:
@@ -110,11 +132,31 @@ def _target(target: ast.AST) -> dict[str, Any] | None:
 class _EffectScanner(ast.NodeVisitor):
     """Walk one target body and record direct writes, known calls, and opaque calls."""
 
-    def __init__(self, path: str, tree: ast.Module, globals_: set[str]) -> None:
+    def __init__(
+        self,
+        path: str,
+        tree: ast.Module,
+        globals_: set[str],
+        parameters: set[str],
+    ) -> None:
         self.path = path
         self.aliases = _aliases(tree)
         self.globals = globals_
+        self.parameters = parameters
+        self.effect_position_calls: set[int] = set()
         self.result = EffectResult([], [], [])
+
+    def _effect_relevant(self, node: ast.Call) -> bool:
+        """Identify unresolved calls that can hide the answer to an effects question."""
+        if _call_category(node) == "routine":
+            return False
+        if id(node) in self.effect_position_calls:
+            return True
+        if isinstance(node.func, ast.Name):
+            return node.func.id in self.parameters
+        if isinstance(node.func, ast.Attribute):
+            return _root_name(node.func.value) in self.parameters
+        return False
 
     def _add_write(self, target: ast.AST) -> None:
         """Record an external write target and assignment-hook uncertainty when relevant."""
@@ -187,12 +229,32 @@ class _EffectScanner(ast.NodeVisitor):
             effect = EFFECT_REGISTRY[canonical]
             self.result.claims.append(_claim(self.path, node, {"type": "known_effect", "effect": {"kind": effect["kind"], "callee": canonical}, "source_text": source_expression(node)}, f"May {effect['description']} through {canonical}(...)."))
         elif not modeled_exception:
-            boundary = _boundary(self.path, node, "unresolved_call", ast.unparse(node.func) + "(...)", "The callee is not in the effect registry and may affect behavior.", _call_category(node))
+            effect_relevant = self._effect_relevant(node)
+            reason = (
+                "Saga cannot determine whether this call mutates state or causes an external effect."
+                if effect_relevant
+                else "The callee is not in the effect registry and may affect behavior."
+            )
+            boundary = _boundary(
+                self.path,
+                node,
+                "unresolved_call",
+                ast.unparse(node.func) + "(...)",
+                reason,
+                _call_category(node),
+                ["effects"] if effect_relevant else None,
+            )
             self.result.boundaries.append(boundary)
         for argument in node.args:
             self.visit(argument)
         for keyword in node.keywords:
             self.visit(keyword.value)
+
+    def visit_Expr(self, node: ast.Expr) -> None:
+        """Treat calls made for discarded results as potentially effect-relevant."""
+        calls = [item for item in ast.walk(node.value) if isinstance(item, ast.Call)]
+        self.effect_position_calls.update(id(item) for item in calls)
+        self.visit(node.value)
 
     def visit_With(self, node: ast.With) -> None:
         """Report context-manager semantics that the POC does not model."""
@@ -229,7 +291,15 @@ def analyze_effects(path: str, tree: ast.Module, node: ast.FunctionDef) -> Effec
     for statement in node.body:
         if isinstance(statement, ast.Global):
             globals_.update(statement.names)
-    scanner = _EffectScanner(path, tree, globals_)
+    parameters = {
+        item.arg
+        for item in [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]
+    }
+    if node.args.vararg:
+        parameters.add(node.args.vararg.arg)
+    if node.args.kwarg:
+        parameters.add(node.args.kwarg.arg)
+    scanner = _EffectScanner(path, tree, globals_, parameters)
     for statement in node.body:
         scanner.visit(statement)
     return scanner.result

@@ -45,6 +45,34 @@ def _deduplicate_boundaries(boundaries: list[dict[str, Any]]) -> list[dict[str, 
         if key not in seen:
             seen.add(key)
             result.append(boundary)
+        else:
+            retained = next(
+                item
+                for item in result
+                if (
+                    item["kind"],
+                    _span_key(item["source_span"]),
+                    tuple(
+                        _span_key(link["call_site"])
+                        for link in item.get("call_chain", [])
+                    ),
+                ) == key
+            )
+            concerns = sorted({
+                *retained.get("concerns", []),
+                *boundary.get("concerns", []),
+            })
+            if concerns:
+                retained["concerns"] = concerns
+            if (
+                "effects" in boundary.get("concerns", [])
+                and "cannot determine whether this call mutates state"
+                not in retained["reason"]
+            ):
+                retained["reason"] += (
+                    " Saga cannot determine whether this call mutates state or "
+                    "causes an external effect."
+                )
     return result
 
 
@@ -104,8 +132,32 @@ def _rewrite_call_boundaries(
             continue
         if key not in replacements:
             replacement = _stopping_boundary(path, caller, resolution)
+            if boundary.get("concerns"):
+                replacement["concerns"] = list(boundary["concerns"])
+                if "effects" in boundary["concerns"]:
+                    replacement["reason"] += (
+                        " Saga cannot determine whether this call mutates state or "
+                        "causes an external effect."
+                    )
             result.append(replacement)
             replacements[key] = replacement["id"]
+        elif boundary.get("concerns"):
+            replacement = next(
+                item for item in result if item["id"] == replacements[key]
+            )
+            replacement["concerns"] = sorted({
+                *replacement.get("concerns", []),
+                *boundary["concerns"],
+            })
+            if (
+                "effects" in boundary["concerns"]
+                and "cannot determine whether this call mutates state"
+                not in replacement["reason"]
+            ):
+                replacement["reason"] += (
+                    " Saga cannot determine whether this call mutates state or "
+                    "causes an external effect."
+                )
         boundary_ids[boundary["id"]] = replacements[key]
     for resolution in resolutions:
         if resolution.status in {"resolved", "external"}:

@@ -79,14 +79,14 @@ function focusCard(card, view = 'full') {
   const relatedIds = new Set(claims.flatMap((claim) => claim.boundary_ids));
   const boundaries = view === 'boundary'
     ? [...card.boundaries]
-    : card.boundaries.filter((boundary) => relatedIds.has(boundary.id));
+    : card.boundaries.filter((boundary) => relatedIds.has(boundary.id) || (view === 'mutation' && boundary.concerns?.includes('effects')));
   return { ...card, view, claims, boundaries, diagnostics: [...card.diagnostics] };
 }
 
 function viewPresentation(card) {
   /** Describe the active view and its honest empty state. */
   const view = card.view || 'full';
-  const empty = view === 'boundary' ? card.boundaries.length === 0 : card.claims.length === 0;
+  const empty = ['boundary', 'mutation'].includes(view) ? card.claims.length === 0 && card.boundaries.length === 0 : card.claims.length === 0;
   return {
     name: view,
     label: VIEW_LABELS[view],

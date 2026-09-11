@@ -127,6 +127,20 @@ test('editor focused views retain claim identity and related boundaries', () => 
   }
 });
 
+test('editor mutation view retains effect-relevant boundaries without inventing claims', () => {
+  const card = loadCard();
+  card.claims = [];
+  card.boundaries = [
+    { ...structuredClone(card.boundaries[1]), id: 'notify', target: { text: 'notify(...)' }, concerns: ['effects'] },
+    { ...structuredClone(card.boundaries[1]), id: 'calculate', target: { text: 'calculate(...)' } },
+    { ...structuredClone(card.boundaries[1]), id: 'len', target: { text: 'len(...)' }, category: 'routine' }
+  ];
+  const focused = focusCard(card, 'mutation');
+  assert.deepEqual(focused.claims, []);
+  assert.deepEqual(focused.boundaries.map((item) => item.id), ['notify']);
+  assert.equal(viewPresentation(focused).empty, false);
+});
+
 test('editor boundary and empty views do not imply completeness', () => {
   const card = loadCard();
   const boundary = focusCard(card, 'boundary');

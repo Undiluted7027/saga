@@ -7,7 +7,7 @@ from pathlib import Path
 
 from saga.inspect import inspect_function
 from saga.render import terminal
-from saga.views import EMPTY_MESSAGES, focus_card
+from saga.views import EMPTY_MESSAGES, focus_card, view_is_empty
 
 SOURCE = """\
 from pathlib import Path
@@ -67,6 +67,75 @@ class FocusedViewTests(unittest.TestCase):
                 for boundary_id in claim["boundary_ids"]
             }
             self.assertEqual({item["id"] for item in focused["boundaries"]}, related)
+
+    def test_mutation_view_keeps_only_effect_relevant_opaque_calls(self):
+        path = Path(self.tempdir.name) / "effects.py"
+        path.write_text(
+            "from pathlib import Path\n\n"
+            "def target(notify, client, values, data, path):\n"
+            "    notify(data)\n"
+            "    response = client.send(data)\n"
+            "    values.append(response)\n"
+            "    size = len(data)\n"
+            "    transformed = calculate(size)\n"
+            "    Path(path).write_text(str(transformed))\n"
+            "    return transformed\n",
+            encoding="utf-8",
+        )
+        full = inspect_function(str(path), "target")
+        focused = focus_card(full, "mutation")
+        targets = {item["target"]["text"] for item in focused["boundaries"]}
+        self.assertEqual(
+            targets,
+            {"notify(...)", "client.send(...)", "values.append(...)"},
+        )
+        self.assertTrue(
+            all(item["concerns"] == ["effects"] for item in focused["boundaries"])
+        )
+        self.assertTrue(
+            all("cannot determine" in item["reason"] for item in focused["boundaries"])
+        )
+        self.assertNotIn("len(...)", targets)
+        self.assertNotIn("calculate(...)", targets)
+        self.assertEqual(
+            [claim["kind"] for claim in focused["claims"]],
+            ["known_effect"],
+        )
+        self.assertTrue(
+            {"len(...)", "calculate(...)"}
+            <= {item["target"]["text"] for item in full["boundaries"]}
+        )
+
+    def test_effect_boundary_alone_makes_mutation_view_nonempty(self):
+        path = Path(self.tempdir.name) / "callback.py"
+        path.write_text(
+            "def target(notify, payload):\n"
+            "    notify(payload)\n",
+            encoding="utf-8",
+        )
+        focused = focus_card(inspect_function(str(path), "target"), "mutation")
+        self.assertFalse(focused["claims"])
+        self.assertEqual(
+            [item["target"]["text"] for item in focused["boundaries"]],
+            ["notify(...)"],
+        )
+        self.assertFalse(view_is_empty(focused))
+        self.assertNotIn(EMPTY_MESSAGES["mutation"], terminal(focused))
+
+    def test_callback_concern_survives_guard_boundary_rewriting(self):
+        path = Path(self.tempdir.name) / "guard_callback.py"
+        path.write_text(
+            "def target(check, payload):\n"
+            "    if check(payload):\n"
+            "        return 1\n"
+            "    return 0\n",
+            encoding="utf-8",
+        )
+        focused = focus_card(inspect_function(str(path), "target"), "mutation")
+        self.assertEqual(len(focused["boundaries"]), 1)
+        boundary = focused["boundaries"][0]
+        self.assertEqual(boundary["concerns"], ["effects"])
+        self.assertIn("cannot determine whether this call mutates state", boundary["reason"])
 
     def test_boundary_view_has_boundaries_without_unrelated_claims(self):
         focused = focus_card(self.full, "boundary")
