@@ -39,8 +39,8 @@ Recorded on 2026-09-11 from the integration checkout:
 
 ```text
 measured_runs: 20
-median_ms: 34.290
-p95_ms: 39.127
+median_ms: 34.352
+p95_ms: 41.204
 python: 3.12.13
 platform: macOS-26.6.1-arm64-arm-64bit
 ```
@@ -69,9 +69,11 @@ fixed.
 ## Decision
 
 ```text
-Decision: pending developer sessions
-Evidence summary: The automated demo and latency checks are complete; human
+Decision: revise
+Evidence summary: The initial evaluation found a conservative slicing bug,
+unclear return-dependency communication, boundary noise, and rough editor
+interaction. Those four issues are addressed in this revision; human
 evaluation data is still required.
 Changes required before further work: Run the five developer sessions and
-replace this decision with `go`, `revise`, or `stop`.
+update this decision if the revised card still fails to save tracing work.
 ```

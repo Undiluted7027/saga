@@ -6,6 +6,17 @@ import json
 from typing import Any
 
 
+def _compact_domain(domain: Any) -> str:
+    """Render an observed domain without dumping serialized object internals."""
+    if not isinstance(domain, dict):
+        return str(domain)
+    if domain.get("kind") == "numeric":
+        return f"numeric {domain.get('min')}–{domain.get('max')} ({domain.get('distinct', 0)} distinct)"
+    if domain.get("kind") == "observed_values":
+        return f"{domain.get('distinct', 0)} observed values"
+    return str(domain.get("kind", "unknown"))
+
+
 def terminal(card: dict[str, Any]) -> str:
     """Render the structured card for concise terminal inspection."""
     target = card["target"]
@@ -26,9 +37,12 @@ def terminal(card: dict[str, Any]) -> str:
             if detail.get("supporting_tests"):
                 lines.append(f"    Supporting tests: {', '.join(detail['supporting_tests'])}")
             if detail.get("input_domain"):
-                lines.append(f"    Input domain: {json.dumps(detail['input_domain'], sort_keys=True)}")
+                domains = ", ".join(f"{name}: {_compact_domain(domain)}" for name, domain in detail["input_domain"].items())
+                lines.append(f"    Input domain: {domains}")
             if detail.get("return_domain"):
-                lines.append(f"    Return domain: {json.dumps(detail['return_domain'], sort_keys=True)}")
+                lines.append(f"    Return domain: {_compact_domain(detail['return_domain'])}")
+            elif detail.get("domain"):
+                lines.append(f"    Observed domain: {_compact_domain(detail['domain'])}")
             if detail.get("raised_executions"):
                 lines.append(f"    Raised executions: {detail['raised_executions']}")
         for span in claim["source_spans"]:
@@ -36,9 +50,15 @@ def terminal(card: dict[str, Any]) -> str:
         for assumption in claim["assumptions"]:
             lines.append(f"    Assumption: {assumption['text']}")
     lines.append(f"  Boundaries: {len(card['boundaries'])}")
-    for boundary in card["boundaries"]:
+    important_boundaries = [boundary for boundary in card["boundaries"] if boundary.get("category") != "routine"]
+    routine_boundaries = [boundary for boundary in card["boundaries"] if boundary.get("category") == "routine"]
+    for boundary in important_boundaries:
         span = boundary["source_span"]
         lines.append(f"  Boundary [{boundary['kind']}] {boundary['target']['text']} at {span['path']}:{span['start_line']}: {boundary['reason']}")
+    if routine_boundaries:
+        targets = ", ".join(boundary["target"]["text"] for boundary in routine_boundaries[:6])
+        suffix = " ..." if len(routine_boundaries) > 6 else ""
+        lines.append(f"  Routine unresolved calls ({len(routine_boundaries)}): {targets}{suffix}")
     for diagnostic in card["diagnostics"]:
         lines.append(f"  Diagnostic [{diagnostic['kind']}]: {diagnostic['message']}")
     return "\n".join(lines)

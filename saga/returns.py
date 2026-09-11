@@ -6,6 +6,7 @@ import ast
 from dataclasses import dataclass, field
 from typing import Any
 
+from .guards import BUILTIN_EXCEPTIONS
 from .inspect import Span, _diagnostic, _span
 
 
@@ -58,9 +59,10 @@ def _node_reads(node: ast.stmt) -> set[str]:
             reads -= {item.id for item in ast.walk(target) if isinstance(item, ast.Name) and isinstance(item.ctx, ast.Store)}
     elif isinstance(node, (ast.AnnAssign, ast.AugAssign, ast.For, ast.AsyncFor)):
         target = node.target
-        if isinstance(node, ast.AugAssign):
-            reads.add(next(iter(target.id for target in ast.walk(target) if isinstance(target, ast.Name) and isinstance(target.ctx, ast.Load)), "")) if isinstance(target, ast.Name) else None
         reads -= {item.id for item in ast.walk(target) if isinstance(item, ast.Name) and isinstance(item.ctx, ast.Store)}
+        if isinstance(node, ast.AugAssign) and isinstance(target, ast.Name):
+            # Augmented assignment reads the old value before writing the new one.
+            reads.add(target.id)
     return {item for item in reads if item}
 
 
@@ -186,11 +188,33 @@ def _contains(outer: dict[str, Any], inner: dict[str, Any]) -> bool:
     return start <= inner_start and inner_end <= end
 
 
-def _claim(path: str, return_node: CFGNode, included: set[int], builder: _CFGBuilder, incoming: dict[int, dict[str, set[int]]], boundaries: list[dict[str, Any]], entry_spans: list[dict[str, Any]]) -> dict[str, Any]:
+def _call_details(path: str, node: ast.AST) -> list[dict[str, Any]]:
+    """Describe calls in a statement without pretending to resolve their bodies."""
+    calls = []
+    for call in ast.walk(node):
+        if not isinstance(call, ast.Call):
+            continue
+        if isinstance(call.func, ast.Name) and call.func.id in BUILTIN_EXCEPTIONS:
+            continue
+        calls.append({"text": f"{ast.unparse(call.func)}(...)", "source_span": _span(path, call).as_dict()})
+    return calls
+
+
+def _claim(path: str, return_node: CFGNode, included: set[int], builder: _CFGBuilder, incoming: dict[int, dict[str, set[int]]], boundaries: list[dict[str, Any]], entry_spans: list[dict[str, Any]], parameter_names: set[str]) -> dict[str, Any]:
     """Build one source-linked may-affect claim for a single return statement."""
     ordered = sorted(included, key=lambda item: (builder.nodes[item].statement.lineno, builder.nodes[item].statement.col_offset))
     source_spans = [_span(path, builder.nodes[item].statement).as_dict() for item in ordered]
     dependencies: list[dict[str, Any]] = []
+    reads = set().union(*(builder.nodes[item].reads for item in ordered))
+    definitions = set().union(*(builder.nodes[item].definitions for item in ordered))
+    calls = [call for item in ordered for call in _call_details(path, builder.nodes[item].statement)]
+    call_keys: set[tuple[str, tuple[tuple[str, Any], ...]]] = set()
+    unique_calls = []
+    for call in calls:
+        key = (call["text"], tuple(sorted(call["source_span"].items())))
+        if key not in call_keys:
+            call_keys.add(key)
+            unique_calls.append(call)
     for item in ordered:
         node = builder.nodes[item]
         span = _span(path, node.statement).as_dict()
@@ -202,15 +226,24 @@ def _claim(path: str, return_node: CFGNode, included: set[int], builder: _CFGBui
             kind = "control_predicate"
         else:
             kind = "statement"
-        dependencies.append({"kind": kind, "names": sorted(node.definitions), "source_span": span})
+        dependencies.append({"kind": kind, "names": sorted(node.definitions), "reads": sorted(node.reads), "calls": _call_details(path, node.statement), "source_span": span})
     boundary_ids = []
     for boundary in boundaries:
         if any(_contains(span, boundary["source_span"]) for span in source_spans):
             boundary_ids.append(boundary["id"])
+    inputs = sorted(reads & parameter_names)
+    summary_parts = []
+    if inputs:
+        summary_parts.append("inputs: " + ", ".join(inputs))
+    if definitions:
+        summary_parts.append("definitions: " + ", ".join(sorted(definitions)))
+    if unique_calls:
+        summary_parts.append("calls: " + ", ".join(call["text"] for call in unique_calls))
+    summary = "Return may depend on " + "; ".join(summary_parts) + "." if summary_parts else "Return has no named inputs, definitions, or calls in the slice."
     return {
         "id": f"return-{return_node.statement.lineno}-{return_node.statement.col_offset}",
         "kind": "return_dependency",
-        "statement": {"text": "Return may depend on the included statements.", "type": "return_dependency", "dependencies": dependencies},
+        "statement": {"text": summary, "type": "return_dependency", "inputs": inputs, "definitions": sorted(definitions), "calls": unique_calls, "dependencies": dependencies},
         "evidence": {"method": "intraprocedural_may_affect", "evidence_class": "derived", "detail": {"return_source_span": _span(path, return_node.statement).as_dict()}},
         "source_spans": source_spans,
         "assumptions": [{"text": "The slice is intraprocedural and conservative; included statements may not affect every execution."}],
@@ -225,6 +258,11 @@ def analyze_returns(path: str, node: ast.FunctionDef, boundaries: list[dict[str,
     if first is None:
         return ReturnResult([], builder.diagnostics)
     incoming = _dataflow(builder)
+    parameter_names = {argument.arg for argument in [*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs]}
+    if node.args.vararg:
+        parameter_names.add(node.args.vararg.arg)
+    if node.args.kwarg:
+        parameter_names.add(node.args.kwarg.arg)
     entry_spans: list[dict[str, Any]] = []
     for statement in node.body:
         if isinstance(statement, ast.Assert) or (isinstance(statement, ast.If) and not statement.orelse and len(statement.body) == 1 and isinstance(statement.body[0], ast.Raise)):
@@ -241,7 +279,7 @@ def analyze_returns(path: str, node: ast.FunctionDef, boundaries: list[dict[str,
             if any(_contains(entry_span, _span(path, item.statement).as_dict()) for entry_span in entry_spans):
                 included.add(item_id)
                 worklist.append(item_id)
-        needed: set[int] = set()
+        visited_reads: set[tuple[int, str]] = set()
         while worklist:
             current = worklist.pop()
             current_node = builder.nodes[current]
@@ -250,12 +288,13 @@ def analyze_returns(path: str, node: ast.FunctionDef, boundaries: list[dict[str,
                     included.add(control)
                     worklist.append(control)
             for name in current_node.reads:
-                if name in needed:
+                read = (current, name)
+                if read in visited_reads:
                     continue
-                needed.add(name)
+                visited_reads.add(read)
                 for definition in incoming[current].get(name, set()):
                     if definition not in included:
                         included.add(definition)
                         worklist.append(definition)
-        claims.append(_claim(path, return_node, included, builder, incoming, boundaries, entry_spans))
+        claims.append(_claim(path, return_node, included, builder, incoming, boundaries, entry_spans, parameter_names))
     return ReturnResult(claims, builder.diagnostics)

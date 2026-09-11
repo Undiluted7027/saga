@@ -17,6 +17,8 @@ EFFECT_REGISTRY: dict[str, dict[str, str]] = {
     },
 }
 PATH_CONSTRUCTORS = {"pathlib.Path"}
+ROUTINE_BUILTINS = {"bool", "dict", "enumerate", "float", "int", "isinstance", "len", "list", "max", "min", "range", "set", "sorted", "str", "sum", "tuple", "zip"}
+ROUTINE_METHODS = {"add", "append", "extend", "get", "items", "keys", "pop", "setdefault", "update", "values"}
 
 
 @dataclass
@@ -41,15 +43,25 @@ def _claim(path: str, node: ast.AST, statement: dict[str, Any], text: str) -> di
     }
 
 
-def _boundary(path: str, node: ast.AST, kind: str, target: str, reason: str) -> dict[str, Any]:
+def _boundary(path: str, node: ast.AST, kind: str, target: str, reason: str, category: str = "important") -> dict[str, Any]:
     """Build a source-linked boundary for behavior the effect model cannot inspect."""
     return {
         "id": f"effect-boundary-{node.lineno}-{node.col_offset}-{kind}",
         "kind": kind,
         "target": {"text": target},
         "reason": reason,
+        "category": category,
         "source_span": _span(path, node).as_dict(),
     }
+
+
+def _call_category(node: ast.Call) -> str:
+    """Classify common unresolved routines as low-signal without calling them safe."""
+    if isinstance(node.func, ast.Name) and node.func.id in ROUTINE_BUILTINS:
+        return "routine"
+    if isinstance(node.func, ast.Attribute) and node.func.attr in ROUTINE_METHODS:
+        return "routine"
+    return "important"
 
 
 def _aliases(tree: ast.Module) -> dict[str, str]:
@@ -174,7 +186,7 @@ class _EffectScanner(ast.NodeVisitor):
             effect = EFFECT_REGISTRY[canonical]
             self.result.claims.append(_claim(self.path, node, {"type": "known_effect", "effect": {"kind": effect["kind"], "callee": canonical}}, f"May {effect['description']} via {canonical}."))
         elif not modeled_exception:
-            boundary = _boundary(self.path, node, "unresolved_call", ast.unparse(node.func) + "(...)", "The callee is not in the effect registry and may affect behavior.")
+            boundary = _boundary(self.path, node, "unresolved_call", ast.unparse(node.func) + "(...)", "The callee is not in the effect registry and may affect behavior.", _call_category(node))
             self.result.boundaries.append(boundary)
         for argument in node.args:
             self.visit(argument)

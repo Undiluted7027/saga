@@ -6,6 +6,12 @@ function loadCard(filePath = path.join(__dirname, 'fixture', 'process_order.card
   return JSON.parse(fs.readFileSync(filePath, 'utf8'));
 }
 
+function targetNameFromLine(line) {
+  /** Extract only a module-level function name, including when the cursor is on `def`. */
+  const match = line.match(/^(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(/);
+  return match ? match[1] : undefined;
+}
+
 function validateCard(card) {
   /** Return contract errors without changing or interpreting the card. */
   const required = ['schema_version', 'target', 'claims', 'boundaries', 'diagnostics'];
@@ -25,11 +31,11 @@ function validateCard(card) {
 function hoverLines(card) {
   /** Render the compact hover surface while leaving full detail to the panel. */
   const lines = ['**Saga** · ' + card.target.signature];
-  const groups = [['rejected_input', 'Guard'], ['return_dependency', 'Return'], ['attempted_write', 'Write'], ['known_effect', 'Effect'], ['test_observation', 'Observed']];
-  if (card.boundaries.length) groups.push(['boundary', 'Boundary']);
-  for (const [kind, label] of groups.slice(0, 4)) {
+  const groups = [['rejected_input', 'Guard'], ['test_observation', 'Observed'], ['boundary', 'Boundary'], ['return_dependency', 'Return'], ['attempted_write', 'Write'], ['known_effect', 'Effect']];
+  for (const [kind, label] of groups) {
+    if (lines.length >= 5) break;
     const claim = card.claims.find((item) => item.kind === kind);
-    const boundary = card.boundaries.find((item) => kind === 'boundary');
+    const boundary = card.boundaries.find((item) => kind === 'boundary' && item.category !== 'routine') || card.boundaries.find((item) => kind === 'boundary');
     const item = claim || boundary;
     if (item) {
       const source = item.source_spans ? item.source_spans[0] : item.source_span;
@@ -43,4 +49,4 @@ function hoverLines(card) {
   return lines;
 }
 
-module.exports = { loadCard, validateCard, hoverLines };
+module.exports = { loadCard, targetNameFromLine, validateCard, hoverLines };

@@ -2,17 +2,14 @@ const vscode = require('vscode');
 const cp = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-const { validateCard, hoverLines } = require('./card');
+const { targetNameFromLine, validateCard, hoverLines } = require('./card');
 
 const staticCardCache = new Map();
 
 function targetName(document, position) {
   /** Return the function name only when the cursor is on a def statement. */
-  const word = document.getWordRangeAtPosition(position);
-  if (!word) return undefined;
-  const name = document.getText(word);
   const line = document.lineAt(position.line).text;
-  return /^\s*(?:async\s+)?def\s+/.test(line) ? name : undefined;
+  return targetNameFromLine(line);
 }
 
 function requestCard(context, document, name, force = false) {
@@ -70,9 +67,11 @@ async function navigate(span, context) {
   /** Open, select, and reveal the source span attached to a claim. */
   const uri = vscode.Uri.file(resolveSourcePath(span, context));
   const document = await vscode.workspace.openTextDocument(uri);
-  const editor = await vscode.window.showTextDocument(document, { preview: true });
-  editor.selection = new vscode.Selection(spanRange(span).start, spanRange(span).end);
-  editor.revealRange(spanRange(span), vscode.TextEditorRevealType.InCenter);
+  const existing = vscode.window.visibleTextEditors.find((editor) => editor.document.uri.toString() === document.uri.toString());
+  const editor = await vscode.window.showTextDocument(document, { viewColumn: existing?.viewColumn || vscode.ViewColumn.One, preview: false });
+  const range = spanRange(span);
+  editor.selection = new vscode.Selection(range.start, range.end);
+  editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
 }
 
 function panelHtml(card, panel) {
@@ -83,13 +82,16 @@ function panelHtml(card, panel) {
     const assumptions = claim.assumptions.length ? `<small>Assumptions: ${esc(claim.assumptions.map((a) => a.text).join('; '))}</small>` : '';
     const label = claim.statement.type || claim.kind;
     const condition = 'condition' in claim.statement ? `<details><summary>Structured condition</summary><pre>${esc(JSON.stringify(claim.statement.condition, null, 2))}</pre></details>` : '';
-    const dependencies = claim.statement.dependencies ? `<details><summary>Dependencies</summary><ul>${claim.statement.dependencies.map((dependency) => `<li>${esc(dependency.kind)} · line ${dependency.source_span.start_line}</li>`).join('')}</ul></details>` : '';
+    const dependencies = claim.statement.dependencies ? `<details><summary>Dependencies</summary><ul>${claim.statement.dependencies.map((dependency) => { const reads = dependency.reads?.length ? ` · reads ${dependency.reads.join(', ')}` : ''; const calls = dependency.calls?.length ? ` · calls ${dependency.calls.map((call) => call.text).join(', ')}` : ''; return `<li>${esc(dependency.kind)} · line ${dependency.source_span.start_line}${esc(reads)}${esc(calls)}</li>`; }).join('')}</ul></details>` : '';
     const detail = claim.evidence.evidence_class === 'observed' ? `<details><summary>Observation details</summary><pre>${esc(JSON.stringify(claim.evidence.detail, null, 2))}</pre></details>` : '';
     return `<article><h3>${esc(label.replaceAll('_', ' '))} <em>${esc(claim.evidence.evidence_class)}</em></h3><p>${esc(claim.statement.text)}</p>${condition}${dependencies}${detail}${assumptions}<p>${links}</p></article>`;
   }).join('');
   const derivedClaims = renderClaims(card.claims.filter((claim) => claim.evidence.evidence_class !== 'observed'));
   const observedClaims = renderClaims(card.claims.filter((claim) => claim.evidence.evidence_class === 'observed'));
-  const boundaries = card.boundaries.map((boundary) => `<article class="boundary"><h3>${esc(boundary.kind.replaceAll('_', ' '))}</h3><p><strong>${esc(boundary.target.text)}</strong>: ${esc(boundary.reason)}</p><a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(boundary.source_span))}">source</a></article>`).join('');
+  const renderBoundary = (boundary) => `<article class="boundary"><h3>${esc(boundary.kind.replaceAll('_', ' '))}</h3><p><strong>${esc(boundary.target.text)}</strong>: ${esc(boundary.reason)}</p><a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(boundary.source_span))}">source</a></article>`;
+  const importantBoundaries = card.boundaries.filter((boundary) => boundary.category !== 'routine');
+  const routineBoundaries = card.boundaries.filter((boundary) => boundary.category === 'routine');
+  const boundaries = importantBoundaries.map(renderBoundary).join('') + (routineBoundaries.length ? `<details><summary>${routineBoundaries.length} routine unresolved calls</summary>${routineBoundaries.map(renderBoundary).join('')}</details>` : '');
   const diagnostics = card.diagnostics.map((diagnostic) => {
     const source = diagnostic.source_span ? ` <a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(diagnostic.source_span))}">source</a>` : '';
     return `<article class="diagnostic"><h3>${esc(diagnostic.kind)}</h3><p>${esc(diagnostic.message)}${source}</p></article>`;
@@ -98,8 +100,17 @@ function panelHtml(card, panel) {
   return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${panel.webview.cspSource};"><style>body{font-family:var(--vscode-font-family);padding:0 2em;line-height:1.45}h1{font-size:1.35em}h3{margin-bottom:.25em;text-transform:capitalize}article{border-top:1px solid var(--vscode-panel-border);padding:.7em 0}em{font-size:.75em;font-weight:normal;background:var(--vscode-textBlockQuote-background);padding:.15em .4em}.boundary{border-left:3px solid var(--vscode-editorWarning-foreground);padding-left:1em}.diagnostic{border-left:3px solid var(--vscode-editorError-foreground);padding-left:1em}small{display:block;color:var(--vscode-descriptionForeground)}pre{white-space:pre-wrap}</style></head><body><h1>${esc(card.target.name)}</h1><p><code>${esc(card.target.signature)}</code></p><p><a href="command:saga.runTests?${target}">Run tests for this function</a></p><h2>Derived claims</h2>${derivedClaims || '<p>None</p>'}<h2>Observed claims</h2>${observedClaims || '<p>None</p>'}<h2>Boundaries</h2>${boundaries || '<p>None</p>'}<h2>Diagnostics</h2>${diagnostics || '<p>None</p>'}</body></html>`;
 }
 
+const evidencePanels = new Map();
+
 function showCardPanel(context, card, document, name) {
   /** Keep an evidence panel current after the source file is saved. */
+  const key = `${document.uri.toString()}::${name}`;
+  const existing = evidencePanels.get(key);
+  if (existing) {
+    existing.panel.reveal(vscode.ViewColumn.Beside, false);
+    existing.render(card);
+    return existing.panel;
+  }
   const panel = vscode.window.createWebviewPanel('sagaEvidenceCard', 'Saga Evidence Card', vscode.ViewColumn.Beside, { enableScripts: false, enableCommandUris: ['saga.navigate', 'saga.runTests'] });
   let refreshTimer;
   const render = (nextCard) => { panel.webview.html = panelHtml(nextCard, panel); };
@@ -118,9 +129,11 @@ function showCardPanel(context, card, document, name) {
     refreshTimer = setTimeout(refresh, 100);
   });
   panel.onDidDispose(() => {
+    evidencePanels.delete(key);
     saveSubscription.dispose();
     clearTimeout(refreshTimer);
   });
+  evidencePanels.set(key, { panel, render });
   render(card);
   return panel;
 }

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from saga.observations import evaluate_observations
 from saga.pytest_plugin import TargetTracer
+from saga.render import terminal
 from saga.trace import contains_unusable_value, serialize_value
 
 
@@ -46,6 +47,21 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(serialized["attributes"]["password"], {"kind": "redacted"})
         self.assertFalse(contains_unusable_value({"kind": "object", "attributes": {"ok": 1}}))
         self.assertTrue(contains_unusable_value(serialized))
+
+    def test_terminal_observation_render_does_not_dump_serialized_inputs(self):
+        observed_card = {
+            "target": {"qualified_name": "target", "name": "target", "status": "supported", "path": "module.py", "signature": "target(value)", "source_span": card()["target"]["source_span"]},
+            "claims": [],
+            "boundaries": [],
+            "diagnostics": [],
+        }
+        observed_card["claims"] = evaluate_observations(observed_card, {"executions": [
+            {"test_id": "a", "input": {"value": {"attributes": {"secret": "redacted"}}}, "outcome": "return", "return": 1},
+            {"test_id": "b", "input": {"value": {"attributes": {"secret": "redacted-2"}}}, "outcome": "return", "return": 2},
+        ]})
+        output = terminal(observed_card)
+        self.assertIn("Input domain:", output)
+        self.assertNotIn("attributes", output)
 
     def test_boundary_trace_records_returns_and_escaping_exceptions(self):
         with tempfile.TemporaryDirectory() as directory:

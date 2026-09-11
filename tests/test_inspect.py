@@ -114,6 +114,13 @@ class InspectFunctionTests(unittest.TestCase):
         self.assertEqual(len([boundary for boundary in card["boundaries"] if boundary["kind"] == "unresolved_call"]), 1)
         self.assertTrue(all(claim["source_spans"] for claim in writes))
 
+    def test_common_unresolved_routines_are_classified_without_being_hidden(self):
+        path = self.write("def count(values):\n    return len(values)\n")
+        boundaries = inspect_function(path, "count")["boundaries"]
+        self.assertEqual(len(boundaries), 1)
+        self.assertEqual(boundaries[0]["kind"], "unresolved_call")
+        self.assertEqual(boundaries[0]["category"], "routine")
+
     def test_registry_resolves_pathlib_aliases_without_unresolved_boundaries(self):
         path = self.write("import pathlib as pl\nfrom pathlib import Path as FilePath\n\ndef write_one(path):\n    pl.Path(path).write_text('one')\n    FilePath(path).write_text('two')\n    return path\n")
         card = inspect_function(path, "write_one")
@@ -144,6 +151,22 @@ class InspectFunctionTests(unittest.TestCase):
         self.assertNotEqual(claims[0]["id"], claims[1]["id"])
         self.assertTrue(any(dependency["names"] == ["positive"] for dependency in claims[0]["statement"]["dependencies"]))
         self.assertTrue(any(dependency["names"] == ["negative"] for dependency in claims[1]["statement"]["dependencies"]))
+
+    def test_augmented_assignment_reads_the_previous_definition(self):
+        path = self.write("def add_to_seed(y):\n    x = 1\n    x += y\n    return x\n")
+        claim = next(claim for claim in inspect_function(path, "add_to_seed")["claims"] if claim["kind"] == "return_dependency")
+        lines = {span["start_line"] for span in claim["source_spans"]}
+        self.assertEqual(lines, {2, 3, 4})
+        self.assertEqual(claim["statement"]["inputs"], ["y"])
+        self.assertIn("definitions: x", claim["statement"]["text"])
+
+    def test_return_claim_names_inputs_definitions_and_calls(self):
+        path = self.write("def total(amount, rate):\n    subtotal = amount\n    total = add_tax(subtotal, rate)\n    return total\n")
+        claim = next(claim for claim in inspect_function(path, "total")["claims"] if claim["kind"] == "return_dependency")
+        statement = claim["statement"]
+        self.assertEqual(statement["inputs"], ["amount", "rate"])
+        self.assertEqual(statement["definitions"], ["subtotal", "total"])
+        self.assertEqual([call["text"] for call in statement["calls"]], ["add_tax(...)"])
 
     def test_loop_slice_is_conservative_and_unknown_call_is_attached(self):
         path = self.write("def total(values):\n    result = 0\n    for value in values:\n        result = add(result, value)\n    return result\n")

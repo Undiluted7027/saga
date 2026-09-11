@@ -1,12 +1,18 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { loadCard, validateCard, hoverLines } = require('../card');
+const { loadCard, targetNameFromLine, validateCard, hoverLines } = require('../card');
 
 test('fixture validates against the evidence-card contract', () => {
   const card = loadCard();
   assert.deepEqual(validateCard(card), []);
   assert.equal(card.schema_version, '0.1');
   for (const claim of card.claims) assert.ok(claim.source_spans.length, claim.id);
+});
+
+test('target selection uses the function name rather than the word under the cursor', () => {
+  assert.equal(targetNameFromLine('def process_order(order):'), 'process_order');
+  assert.equal(targetNameFromLine('async def process_order(order):'), 'process_order');
+  assert.equal(targetNameFromLine('    def nested(order):'), undefined);
 });
 
 test('fixture exercises every Slice 0 result kind', () => {
@@ -19,6 +25,8 @@ test('hover stays compact and leaves details for the panel', () => {
   const lines = hoverLines(loadCard());
   assert.ok(lines.length <= 6, `hover has ${lines.length} lines`);
   assert.match(lines.at(-1), /Open detailed evidence card/);
+  assert.ok(lines.some((line) => line.includes('Observed')));
+  assert.ok(lines.some((line) => line.includes('Boundary')));
 });
 
 test('invalid cards produce actionable validation errors', () => {
