@@ -160,4 +160,9 @@ def inspect_function(file_path: str, qualified_name: str) -> dict[str, Any]:
                 card["boundaries"].append(boundary)
                 existing_boundaries.add(key)
         card["diagnostics"].extend(effects.diagnostics)
+        from .returns import analyze_returns
+
+        returns = analyze_returns(file_path, node, card["boundaries"])
+        card["claims"].extend(returns.claims)
+        card["diagnostics"].extend(returns.diagnostics)
     return card

@@ -20,13 +20,13 @@ class InspectFunctionTests(unittest.TestCase):
         self.addCleanup(self.tempdir.cleanup)
         return str(path)
 
-    def test_valid_module_function_has_metadata_and_no_claims(self):
+    def test_valid_module_function_has_metadata_and_return_claim(self):
         path = self.write("def greet(name: str = 'world') -> str:\n    return name\n")
         card = inspect_function(path, "greet")
         self.assertEqual(card["target"]["status"], "supported")
         self.assertEqual(card["target"]["signature"], "greet(name: str='world')")
         self.assertEqual(card["target"]["source_span"]["start_line"], 1)
-        self.assertEqual(card["claims"], [])
+        self.assertEqual([claim["kind"] for claim in card["claims"]], ["return_dependency"])
         self.assertEqual(card["diagnostics"], [])
 
     def test_missing_file_and_target_are_diagnostic(self):
@@ -66,7 +66,7 @@ class InspectFunctionTests(unittest.TestCase):
     def test_guard_and_exception_claims_preserve_structure_and_spans(self):
         path = self.write("def charge(amount):\n    if amount <= 0:\n        raise ValueError('amount')\n    return amount\n")
         card = inspect_function(path, "charge")
-        self.assertEqual([claim["kind"] for claim in card["claims"]], ["rejected_input", "explicit_exception"])
+        self.assertEqual([claim["kind"] for claim in card["claims"][:2]], ["rejected_input", "explicit_exception"])
         guard = card["claims"][0]
         self.assertEqual(guard["statement"]["type"], "entry_guard")
         self.assertEqual(guard["statement"]["condition"]["kind"], "comparison")
@@ -95,13 +95,13 @@ class InspectFunctionTests(unittest.TestCase):
 
     def test_late_and_nested_guards_are_not_entry_requirements(self):
         path = self.write("def late(amount):\n    total = amount\n    if amount <= 0:\n        raise ValueError()\n    return total\n\ndef nested(amount):\n    if amount:\n        if amount <= 0:\n            raise ValueError()\n    return amount\n")
-        self.assertEqual(inspect_function(path, "late")["claims"], [])
-        self.assertEqual(inspect_function(path, "nested")["claims"], [])
+        self.assertFalse([claim for claim in inspect_function(path, "late")["claims"] if claim["kind"] == "rejected_input"])
+        self.assertFalse([claim for claim in inspect_function(path, "nested")["claims"] if claim["kind"] == "rejected_input"])
 
     def test_unmodeled_condition_is_diagnostic(self):
         path = self.write("def unknown(amount):\n    if amount <= limit:\n        raise ValueError()\n    return amount\n")
         card = inspect_function(path, "unknown")
-        self.assertEqual(card["claims"], [])
+        self.assertFalse([claim for claim in card["claims"] if claim["kind"] == "rejected_input"])
         self.assertEqual(card["diagnostics"][0]["kind"], "unsupported_semantics")
         self.assertIn("source_span", card["diagnostics"][0])
 
@@ -127,6 +127,32 @@ class InspectFunctionTests(unittest.TestCase):
         effects = [claim for claim in inspect_function(path, "write_twice")["claims"] if claim["kind"] == "known_effect"]
         self.assertEqual(len(effects), 2)
         self.assertNotEqual(effects[0]["source_spans"], effects[1]["source_spans"])
+
+    def test_return_slice_keeps_reaching_definitions_and_excludes_unrelated_work(self):
+        card = inspect_function("fixture/process_order.py", "process_order")
+        return_claim = next(claim for claim in card["claims"] if claim["kind"] == "return_dependency")
+        lines = {span["start_line"] for span in return_claim["source_spans"]}
+        self.assertTrue({3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 18}.issubset(lines))
+        self.assertNotIn(15, lines)
+        self.assertIn("effect-boundary-9-10-unresolved_call", return_claim["boundary_ids"])
+        self.assertIn("effect-boundary-11-19-unresolved_call", return_claim["boundary_ids"])
+
+    def test_multiple_returns_keep_separate_slices(self):
+        path = self.write("def choose(value):\n    if value:\n        positive = value + 1\n        return positive\n    negative = value - 1\n    return negative\n")
+        claims = [claim for claim in inspect_function(path, "choose")["claims"] if claim["kind"] == "return_dependency"]
+        self.assertEqual(len(claims), 2)
+        self.assertNotEqual(claims[0]["id"], claims[1]["id"])
+        self.assertTrue(any(dependency["names"] == ["positive"] for dependency in claims[0]["statement"]["dependencies"]))
+        self.assertTrue(any(dependency["names"] == ["negative"] for dependency in claims[1]["statement"]["dependencies"]))
+
+    def test_loop_slice_is_conservative_and_unknown_call_is_attached(self):
+        path = self.write("def total(values):\n    result = 0\n    for value in values:\n        result = add(result, value)\n    return result\n")
+        card = inspect_function(path, "total")
+        claim = next(claim for claim in card["claims"] if claim["kind"] == "return_dependency")
+        lines = {span["start_line"] for span in claim["source_spans"]}
+        self.assertTrue({2, 3, 4, 5}.issubset(lines))
+        self.assertTrue(any(boundary["kind"] == "unresolved_call" and boundary["source_span"]["start_line"] == 4 for boundary in card["boundaries"]))
+        self.assertTrue(any(boundary["source_span"]["start_line"] == 4 and boundary["id"] in claim["boundary_ids"] for boundary in card["boundaries"]))
 
     def test_raising_a_modeled_builtin_exception_is_not_an_unresolved_call(self):
         path = self.write("def fail(order):\n    order.status = 'failed'\n    raise RuntimeError('stop')\n")

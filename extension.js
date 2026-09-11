@@ -57,7 +57,8 @@ function panelHtml(card, panel) {
     const assumptions = claim.assumptions.length ? `<small>Assumptions: ${esc(claim.assumptions.map((a) => a.text).join('; '))}</small>` : '';
     const label = claim.statement.type || claim.kind;
     const condition = 'condition' in claim.statement ? `<details><summary>Structured condition</summary><pre>${esc(JSON.stringify(claim.statement.condition, null, 2))}</pre></details>` : '';
-    return `<article><h3>${esc(label.replaceAll('_', ' '))} <em>${esc(claim.evidence.evidence_class)}</em></h3><p>${esc(claim.statement.text)}</p>${condition}${assumptions}<p>${links}</p></article>`;
+    const dependencies = claim.statement.dependencies ? `<details><summary>Dependencies</summary><ul>${claim.statement.dependencies.map((dependency) => `<li>${esc(dependency.kind)} · line ${dependency.source_span.start_line}</li>`).join('')}</ul></details>` : '';
+    return `<article><h3>${esc(label.replaceAll('_', ' '))} <em>${esc(claim.evidence.evidence_class)}</em></h3><p>${esc(claim.statement.text)}</p>${condition}${dependencies}${assumptions}<p>${links}</p></article>`;
   }).join('');
   const boundaries = card.boundaries.map((boundary) => `<article class="boundary"><h3>${esc(boundary.kind.replaceAll('_', ' '))}</h3><p><strong>${esc(boundary.target.text)}</strong>: ${esc(boundary.reason)}</p><a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(boundary.source_span))}">source</a></article>`).join('');
   const diagnostics = card.diagnostics.map((diagnostic) => {

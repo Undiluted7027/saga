@@ -16,6 +16,12 @@ def terminal(card: dict[str, Any]) -> str:
         lines.append(f"  Claim [{label}; {claim['evidence']['evidence_class']}]: {statement['text']}")
         if "condition" in statement:
             lines.append(f"    Condition: {json.dumps(statement['condition'], sort_keys=True)}")
+        if "dependencies" in statement:
+            for dependency in statement["dependencies"]:
+                span = dependency["source_span"]
+                lines.append(f"    Dependency [{dependency['kind']}] at {span['path']}:{span['start_line']}")
+        for span in claim["source_spans"]:
+            lines.append(f"    Source: {span['path']}:{span['start_line']}")
         for assumption in claim["assumptions"]:
             lines.append(f"    Assumption: {assumption['text']}")
     lines.append(f"  Boundaries: {len(card['boundaries'])}")
