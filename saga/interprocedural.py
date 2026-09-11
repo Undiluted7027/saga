@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .effects import analyze_effects
+from .exceptions import analyze_exceptions, filter_call_exception
 from .guards import analyze_guards
 from .inspect import _span
 from .local_calls import LocalCallResolution, call_record, resolve_local_calls
@@ -145,6 +146,8 @@ def _propagated_text(invoked_as: str, claim: dict[str, Any]) -> str:
         return f"{label} returns {text[len('Returns '):]}"
     if text.startswith("Raises "):
         return f"{label} may raise {text[len('Raises '):]}"
+    if text.startswith("Re-raises "):
+        return f"{label} may re-raise {text[len('Re-raises '):]}"
     if text.startswith("Attempts to "):
         return f"{label} may attempt to {text[len('Attempts to '):]}"
     if text.startswith("May "):
@@ -232,13 +235,20 @@ def _analyze_direct(
 ) -> tuple[FunctionEvidence, list[LocalCallResolution]]:
     """Run existing analyses and classify local calls at one depth."""
     guard_claims, guard_boundaries, guard_diagnostics = analyze_guards(path, node)
+    exceptions = analyze_exceptions(path, tree, node)
     effects = analyze_effects(path, tree, node)
     resolutions = resolve_local_calls(tree, node, ancestry, depth)
-    direct_claims = [*guard_claims, *effects.claims]
+    # Guard analysis owns rejected-input claims. Exception flow owns all
+    # explicit-exception claims, including the raises used by entry guards.
+    direct_claims = [
+        *(claim for claim in guard_claims if claim["kind"] != "explicit_exception"),
+        *exceptions.claims,
+        *effects.claims,
+    ]
     boundaries, boundary_ids = _rewrite_call_boundaries(
         path,
         node,
-        [*guard_boundaries, *effects.boundaries],
+        [*guard_boundaries, *exceptions.boundaries, *effects.boundaries],
         resolutions,
     )
     _remap_claim_boundaries(direct_claims, boundary_ids)
@@ -246,7 +256,7 @@ def _analyze_direct(
     evidence = FunctionEvidence(
         [*direct_claims, *returns.claims],
         boundaries,
-        [*guard_diagnostics, *effects.diagnostics, *returns.diagnostics],
+        [*guard_diagnostics, *exceptions.diagnostics, *effects.diagnostics, *returns.diagnostics],
     )
     return evidence, resolutions
 
@@ -282,7 +292,29 @@ def analyze_one_hop(path: str, tree: ast.Module, node: ast.FunctionDef) -> Funct
                 continue
             if claim["kind"] not in {"return_dependency", "attempted_write", "known_effect", "explicit_exception"}:
                 continue
+            exception_boundaries: list[dict[str, Any]] = []
+            handler_spans: list[dict[str, Any]] = []
+            if claim["kind"] == "explicit_exception":
+                keep, exception_boundaries, handler_spans = filter_call_exception(
+                    path, tree, node, resolution.call, claim
+                )
+                if not keep:
+                    continue
+                for boundary in exception_boundaries:
+                    propagated_boundary = _propagate_boundary(path, node, resolution, boundary)
+                    boundary_map[boundary["id"]] = propagated_boundary["id"]
+                    evidence.boundaries.append(propagated_boundary)
             propagated = _propagate_claim(path, node, resolution, claim, boundary_map)
+            if handler_spans:
+                propagated["statement"]["handler_spans"] = handler_spans
+                propagated["source_spans"] = _unique_spans([
+                    *propagated["source_spans"],
+                    *handler_spans,
+                ])
+            if exception_boundaries:
+                propagated["boundary_ids"].extend(
+                    boundary_map[item["id"]] for item in exception_boundaries
+                )
             key = (propagated["id"], propagated["kind"])
             if key not in propagated_keys:
                 propagated_keys.add(key)

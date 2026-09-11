@@ -11,6 +11,13 @@ for one hop. Propagated facts show the call site, callee, argument bindings, and
 callee evidence. Recursion, a second hop, ambiguous names, and unsupported
 callees remain visible boundaries.
 
+Saga reports explicit exceptions that may leave the selected function. It
+removes exceptions caught by a statically clear local handler and carries
+exceptions through the supported one-hop call. Bare re-raises keep their type
+uncertainty. Unknown exception classes, handler matching, and possible
+context-manager suppression remain visible limits. Saga does not infer implicit
+Python exceptions or exception behavior from unresolved calls.
+
 To run its focused tests:
 
 ```sh

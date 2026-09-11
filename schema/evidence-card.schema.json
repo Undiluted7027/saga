@@ -40,6 +40,7 @@
             "condition": { "anyOf": [{ "$ref": "#/$defs/expression" }, { "type": "null" }] },
             "exit": { "type": "object" },
             "exception": { "type": "object" },
+            "handler_spans": { "type": "array", "items": { "$ref": "#/$defs/span" } },
             "target": { "type": "object" },
             "effect": { "type": "object" },
             "dependencies": { "type": "array", "items": { "type": "object" } }
@@ -52,7 +53,7 @@
         "call_chain": { "type": "array", "items": { "$ref": "#/$defs/callLink" } }
       }
     },
-    "boundary": { "type": "object", "required": ["id", "kind", "target", "reason", "source_span"], "properties": { "id": { "type": "string" }, "kind": { "enum": ["unresolved_call", "dynamic_dispatch", "assignment_hooks", "unsupported_semantics", "local_call_limit", "unsupported_local_callee", "ambiguous_local_callee"] }, "target": { "type": "object", "required": ["text"], "properties": { "text": { "type": "string" } } }, "reason": { "type": "string" }, "category": { "enum": ["important", "routine"] }, "source_span": { "$ref": "#/$defs/span" }, "call_chain": { "type": "array", "items": { "$ref": "#/$defs/callLink" } } } },
+    "boundary": { "type": "object", "required": ["id", "kind", "target", "reason", "source_span"], "properties": { "id": { "type": "string" }, "kind": { "enum": ["unresolved_call", "dynamic_dispatch", "assignment_hooks", "unsupported_semantics", "exception_dispatch", "exception_matching", "local_call_limit", "unsupported_local_callee", "ambiguous_local_callee"] }, "target": { "type": "object", "required": ["text"], "properties": { "text": { "type": "string" } } }, "reason": { "type": "string" }, "category": { "enum": ["important", "routine"] }, "source_span": { "$ref": "#/$defs/span" }, "call_chain": { "type": "array", "items": { "$ref": "#/$defs/callLink" } } } },
     "diagnostic": { "type": "object", "required": ["kind", "message"], "properties": { "kind": { "type": "string" }, "message": { "type": "string" }, "source_span": { "$ref": "#/$defs/span" }, "call_chain": { "type": "array", "items": { "$ref": "#/$defs/callLink" } } } }
   }
 }

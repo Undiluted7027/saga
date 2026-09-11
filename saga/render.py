@@ -42,6 +42,8 @@ def terminal(card: dict[str, Any]) -> str:
             lines.append(f"    Source syntax: {statement['source_text']}")
         if statement.get("condition_source_text"):
             lines.append(f"    Condition syntax: {statement['condition_source_text']}")
+        for handler_span in statement.get("handler_spans", []):
+            lines.append(f"    Handler checked: {handler_span['path']}:{handler_span['start_line']}")
         if statement.get("inputs"):
             lines.append(f"    May use inputs: {', '.join(statement['inputs'])}")
         if statement.get("definitions"):

@@ -87,10 +87,11 @@ function panelHtml(card, panel) {
     const label = claim.statement.type || claim.kind;
     const sourceExpression = view.sourceText ? `<p>Source syntax: <code>${esc(view.sourceText)}</code></p>` : '';
     const conditionSource = view.conditionSourceText ? `<p>Condition syntax: <code>${esc(view.conditionSourceText)}</code></p>` : '';
+    const handlers = view.handlerSpans.length ? `<p>Handlers checked: ${view.handlerSpans.map((span) => `<a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(span))}">${esc(`${span.path}:${span.start_line}`)}</a>`).join(' · ')}</p>` : '';
     const condition = 'condition' in claim.statement ? `<details><summary>Structured condition</summary><pre>${esc(JSON.stringify(view.condition, null, 2))}</pre></details>` : '';
     const dependencies = view.dependencies.length ? `<details><summary>Why this return may have this value</summary><ul>${view.dependencies.map((dependency) => { const writes = dependency.names?.length ? `defines ${dependency.names.join(', ')}` : ''; const reads = dependency.reads?.length ? `reads ${dependency.reads.join(', ')}` : ''; const calls = dependency.calls?.length ? `calls ${dependency.calls.map((call) => call.text).join(', ')}` : ''; const facts = [writes, reads, calls].filter(Boolean).join('; ') || dependency.kind.replaceAll('_', ' '); return `<li>Line ${dependency.source_span.start_line}: ${esc(facts)}</li>`; }).join('')}</ul></details>` : '';
     const detail = view.evidenceClass === 'observed' ? `<details><summary>Observation details</summary><pre>${esc(JSON.stringify(claim.evidence.detail, null, 2))}</pre></details>` : '';
-    return `<article><h3>${esc(label.replaceAll('_', ' '))} <em>${esc(view.evidenceClass)}</em></h3><p>${esc(view.summary)}</p>${sourceExpression}${conditionSource}${condition}${dependencies}${callChain}${detail}${evidence}${assumptions}<p>${links}</p></article>`;
+    return `<article><h3>${esc(label.replaceAll('_', ' '))} <em>${esc(view.evidenceClass)}</em></h3><p>${esc(view.summary)}</p>${sourceExpression}${conditionSource}${handlers}${condition}${dependencies}${callChain}${detail}${evidence}${assumptions}<p>${links}</p></article>`;
   }).join('');
   const derivedClaims = renderClaims(card.claims.filter((claim) => claim.evidence.evidence_class !== 'observed'));
   const observedClaims = renderClaims(card.claims.filter((claim) => claim.evidence.evidence_class === 'observed'));

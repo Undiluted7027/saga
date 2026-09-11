@@ -74,6 +74,30 @@ Saga now follows a direct call to one supported synchronous function in the same
 
 This removed misleading boundaries around `_number`, `_fingerprint`, and `_domain` while inspecting `evaluate_observations`. It also exposed a cost. Calling `_domain` twice produces two copies of its facts because the call sites are different, and each copy carries the callee's unresolved boundaries. That is honest but noisy. Ticket #12 should group this material without erasing either call site.
 
+### Escaping explicit exceptions (#10)
+
+Dogfooded on 2026-09-11 against `_selector` and `run_tests` in
+`saga/testing.py`, `_rmtree_safe_fd` in Python 3.12's `shutil.py`, and
+`_url_handler` in Python 3.12's `pydoc.py`.
+
+`_selector` now reports the `ValueError` that can escape its entry guard.
+`run_tests` carries that exception through the local `_selector` call and shows
+the call site and argument binding. `_rmtree_safe_fd` contains an explicit
+`OSError` caught by a local `except OSError`; Saga does not report it as
+escaping. `_url_handler` contains both a handled `ValueError` and a separate
+escaping `TypeError`; only the latter appears.
+
+Saga now walks explicit raises outside the entry-guard prefix, removes raises
+caught by a clear builtin handler, reports typed and unknown re-raises, and
+propagates exceptions through one supported local call. It also marks cases it
+cannot settle: custom handler types, rebound builtin exception names, and
+context managers that may suppress an exception. Unresolved calls still do not
+grow invented exception lists.
+
+This slice answers “which explicit exception can escape?” on real functions.
+It does not answer “can this function raise at all?” because implicit Python
+errors and third-party call behavior remain outside the model.
+
 ## Later developer evaluation protocol
 
 Run with at least five developers who did not write Saga. Use two comparable
@@ -99,8 +123,8 @@ fixed.
 Decision: revise
 Evidence summary: The analyzer and editor flow work. Claims are readable and
 Saga can follow one module-local call with explicit stop conditions. Repeated
-callee facts and boundaries still make real cards noisy, escaping exceptions
-remain incomplete, and the card has no question-focused views.
+callee facts and boundaries still make real cards noisy, exception reporting is
+limited to explicit raises, and the card has no question-focused views.
 Before external evaluation: Finish the remaining capability slices in
 docs/poc.md and dogfood them outside the fixture directory. Start developer
 sessions when the card can answer useful questions without fixture-specific
