@@ -64,7 +64,15 @@ Dogfooded on 2026-09-11 against `_compact_domain` in `saga/render.py`, `_resolve
 
 The card now names the expression returned on each path and states the conditions needed to reach it. Guards describe truthiness and simple comparisons instead of dumping the serialized condition. The CLI and editor use the same claim text, and the detail view keeps the source expression, analysis method, assumptions, source links, and limiting boundaries.
 
-This made multi-return functions easier to follow. It also made the next problems harder to ignore. Routine calls still create long boundary lists, recursive and module-local helpers remain opaque, and a large dependency slice is still dense when expanded. Those belong to #12 and #11. They are not wording problems.
+This made multi-return functions easier to follow. It also made the next problems harder to ignore. At that point, routine calls still created long boundary lists, recursive and module-local helpers remained opaque, and a large dependency slice was still dense when expanded. Those belonged to #12 and #11. They were not wording problems.
+
+### One-hop module-local calls (#11)
+
+Dogfooded on 2026-09-11 against `evaluate_observations` in `saga/observations.py`, `terminal` in `saga/render.py`, and `_resolve` in `saga/effects.py`.
+
+Saga now follows a direct call to one supported synchronous function in the same module. The propagated claim records the caller, callee, call site, callee span, and simple argument bindings. The old unresolved boundary disappears. Recursion and calls made by the callee stop at a named `local_call_limit` boundary.
+
+This removed misleading boundaries around `_number`, `_fingerprint`, and `_domain` while inspecting `evaluate_observations`. It also exposed a cost. Calling `_domain` twice produces two copies of its facts because the call sites are different, and each copy carries the callee's unresolved boundaries. That is honest but noisy. Ticket #12 should group this material without erasing either call site.
 
 ## Later developer evaluation protocol
 
@@ -89,10 +97,12 @@ fixed.
 
 ```text
 Decision: revise
-Evidence summary: The analyzer and editor flow work. The known slicing and
-panel regressions are fixed. Return presentation remains unwieldy, boundaries
-are still noisy, and calls to local helpers end useful analysis too early.
-Before external evaluation: Build the capability slices in docs/poc.md and
-dogfood them outside the fixture directory. Start developer sessions when the
-card can answer useful questions without fixture-specific help.
+Evidence summary: The analyzer and editor flow work. Claims are readable and
+Saga can follow one module-local call with explicit stop conditions. Repeated
+callee facts and boundaries still make real cards noisy, escaping exceptions
+remain incomplete, and the card has no question-focused views.
+Before external evaluation: Finish the remaining capability slices in
+docs/poc.md and dogfood them outside the fixture directory. Start developer
+sessions when the card can answer useful questions without fixture-specific
+help.
 ```

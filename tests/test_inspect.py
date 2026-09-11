@@ -170,8 +170,10 @@ class InspectFunctionTests(unittest.TestCase):
         lines = {span["start_line"] for span in return_claim["source_spans"]}
         self.assertTrue({3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 18}.issubset(lines))
         self.assertNotIn(15, lines)
-        self.assertIn("effect-boundary-9-10-unresolved_call", return_claim["boundary_ids"])
-        self.assertIn("effect-boundary-11-19-unresolved_call", return_claim["boundary_ids"])
+        self.assertNotIn("effect-boundary-9-10-unresolved_call", return_claim["boundary_ids"])
+        self.assertNotIn("effect-boundary-11-19-unresolved_call", return_claim["boundary_ids"])
+        local_returns = [claim for claim in card["claims"] if claim["kind"] == "return_dependency" and claim.get("call_chain")]
+        self.assertEqual({claim["call_chain"][0]["callee"] for claim in local_returns}, {"lookup_tax", "select_discount"})
 
     def test_multiple_returns_keep_separate_slices(self):
         path = self.write("def choose(value):\n    if value:\n        positive = value + 1\n        return positive\n    negative = value - 1\n    return negative\n")

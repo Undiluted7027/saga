@@ -77,28 +77,31 @@ async function navigate(span, context) {
 function panelHtml(card, panel) {
   /** Render the shared structured result as a navigable webview document. */
   const esc = (value) => String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const renderCallChain = (chain) => chain?.length ? `<details><summary>Local call chain</summary><ol>${chain.map((link) => { const bindings = link.argument_bindings.length ? ` (${link.argument_bindings.map((item) => `${item.parameter} = ${item.argument}`).join(', ')})` : ''; return `<li>${esc(link.caller)} → ${esc(link.callee)}${esc(bindings)} · <a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(link.call_site))}">call</a> · <a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(link.callee_span))}">callee</a></li>`; }).join('')}</ol></details>` : '';
   const renderClaims = (claims) => claims.map((claim) => {
     const view = claimPresentation(claim);
     const links = view.sourceSpans.map((span, index) => `<a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(span))}">source ${index + 1}</a>`).join(' · ');
     const assumptions = view.assumptions.length ? `<small>Assumptions: ${esc(view.assumptions.join('; '))}</small>` : '';
     const evidence = `<small>Method: ${esc(view.method)}${view.boundaryIds.length ? ` · Limited by: ${esc(view.boundaryIds.join(', '))}` : ''}</small>`;
+    const callChain = renderCallChain(view.callChain);
     const label = claim.statement.type || claim.kind;
     const sourceExpression = view.sourceText ? `<p>Source syntax: <code>${esc(view.sourceText)}</code></p>` : '';
     const conditionSource = view.conditionSourceText ? `<p>Condition syntax: <code>${esc(view.conditionSourceText)}</code></p>` : '';
     const condition = 'condition' in claim.statement ? `<details><summary>Structured condition</summary><pre>${esc(JSON.stringify(view.condition, null, 2))}</pre></details>` : '';
     const dependencies = view.dependencies.length ? `<details><summary>Why this return may have this value</summary><ul>${view.dependencies.map((dependency) => { const writes = dependency.names?.length ? `defines ${dependency.names.join(', ')}` : ''; const reads = dependency.reads?.length ? `reads ${dependency.reads.join(', ')}` : ''; const calls = dependency.calls?.length ? `calls ${dependency.calls.map((call) => call.text).join(', ')}` : ''; const facts = [writes, reads, calls].filter(Boolean).join('; ') || dependency.kind.replaceAll('_', ' '); return `<li>Line ${dependency.source_span.start_line}: ${esc(facts)}</li>`; }).join('')}</ul></details>` : '';
     const detail = view.evidenceClass === 'observed' ? `<details><summary>Observation details</summary><pre>${esc(JSON.stringify(claim.evidence.detail, null, 2))}</pre></details>` : '';
-    return `<article><h3>${esc(label.replaceAll('_', ' '))} <em>${esc(view.evidenceClass)}</em></h3><p>${esc(view.summary)}</p>${sourceExpression}${conditionSource}${condition}${dependencies}${detail}${evidence}${assumptions}<p>${links}</p></article>`;
+    return `<article><h3>${esc(label.replaceAll('_', ' '))} <em>${esc(view.evidenceClass)}</em></h3><p>${esc(view.summary)}</p>${sourceExpression}${conditionSource}${condition}${dependencies}${callChain}${detail}${evidence}${assumptions}<p>${links}</p></article>`;
   }).join('');
   const derivedClaims = renderClaims(card.claims.filter((claim) => claim.evidence.evidence_class !== 'observed'));
   const observedClaims = renderClaims(card.claims.filter((claim) => claim.evidence.evidence_class === 'observed'));
-  const renderBoundary = (boundary) => `<article class="boundary"><h3>${esc(boundary.kind.replaceAll('_', ' '))}</h3><p><strong>${esc(boundary.target.text)}</strong>: ${esc(boundary.reason)}</p><a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(boundary.source_span))}">source</a></article>`;
+  const renderBoundary = (boundary) => `<article class="boundary"><h3>${esc(boundary.kind.replaceAll('_', ' '))}</h3><p><strong>${esc(boundary.target.text)}</strong>: ${esc(boundary.reason)}</p>${renderCallChain(boundary.call_chain)}<a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(boundary.source_span))}">source</a></article>`;
   const importantBoundaries = card.boundaries.filter((boundary) => boundary.category !== 'routine');
   const routineBoundaries = card.boundaries.filter((boundary) => boundary.category === 'routine');
   const boundaries = importantBoundaries.map(renderBoundary).join('') + (routineBoundaries.length ? `<details><summary>${routineBoundaries.length} routine unresolved calls</summary>${routineBoundaries.map(renderBoundary).join('')}</details>` : '');
   const diagnostics = card.diagnostics.map((diagnostic) => {
     const source = diagnostic.source_span ? ` <a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(diagnostic.source_span))}">source</a>` : '';
-    return `<article class="diagnostic"><h3>${esc(diagnostic.kind)}</h3><p>${esc(diagnostic.message)}${source}</p></article>`;
+    const chain = renderCallChain(diagnostic.call_chain);
+    return `<article class="diagnostic"><h3>${esc(diagnostic.kind)}</h3><p>${esc(diagnostic.message)}${source}</p>${chain}</article>`;
   }).join('');
   const target = encodeURIComponent(JSON.stringify({ path: card.target.path, name: card.target.name }));
   return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${panel.webview.cspSource};"><style>body{font-family:var(--vscode-font-family);padding:0 2em;line-height:1.45}h1{font-size:1.35em}h3{margin-bottom:.25em;text-transform:capitalize}article{border-top:1px solid var(--vscode-panel-border);padding:.7em 0}em{font-size:.75em;font-weight:normal;background:var(--vscode-textBlockQuote-background);padding:.15em .4em}.boundary{border-left:3px solid var(--vscode-editorWarning-foreground);padding-left:1em}.diagnostic{border-left:3px solid var(--vscode-editorError-foreground);padding-left:1em}small{display:block;color:var(--vscode-descriptionForeground)}pre{white-space:pre-wrap}</style></head><body><h1>${esc(card.target.name)}</h1><p><code>${esc(card.target.signature)}</code></p><p><a href="command:saga.runTests?${target}">Run tests for this function</a></p><h2>Derived claims</h2>${derivedClaims || '<p>None</p>'}<h2>Observed claims</h2>${observedClaims || '<p>None</p>'}<h2>Boundaries</h2>${boundaries || '<p>None</p>'}<h2>Diagnostics</h2>${diagnostics || '<p>None</p>'}</body></html>`;

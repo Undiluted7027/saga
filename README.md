@@ -6,6 +6,11 @@ Saga analyzes one supported Python 3.12 module-level function and returns a
 versioned evidence card. Static claims and test observations are separate, and
 every claim links back to source spans.
 
+Direct calls to supported synchronous functions in the same module are followed
+for one hop. Propagated facts show the call site, callee, argument bindings, and
+callee evidence. Recursion, a second hop, ambiguous names, and unsupported
+callees remain visible boundaries.
+
 To run its focused tests:
 
 ```sh

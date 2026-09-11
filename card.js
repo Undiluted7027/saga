@@ -41,6 +41,7 @@ function claimPresentation(claim) {
     sourceSpans: [...claim.source_spans],
     dependencies: claim.statement.dependencies || [],
     condition: claim.statement.condition,
+    callChain: claim.call_chain || [],
   };
 }
 

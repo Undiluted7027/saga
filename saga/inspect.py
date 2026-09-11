@@ -143,26 +143,10 @@ def inspect_function(file_path: str, qualified_name: str) -> dict[str, Any]:
         card["diagnostics"].append(_diagnostic("unsupported_target", "Generator functions are outside the Slice 1 scope.", target_span))
     else:
         card["target"]["status"] = "supported"
-        from .guards import analyze_guards
+        from .interprocedural import analyze_one_hop
 
-        guard_claims, guard_boundaries, guard_diagnostics = analyze_guards(file_path, node)
-        card["claims"].extend(guard_claims)
-        card["boundaries"].extend(guard_boundaries)
-        card["diagnostics"].extend(guard_diagnostics)
-        from .effects import analyze_effects
-
-        effects = analyze_effects(file_path, tree, node)
-        card["claims"].extend(effects.claims)
-        existing_boundaries = {(item["kind"], tuple(sorted(item["source_span"].items()))) for item in card["boundaries"]}
-        for boundary in effects.boundaries:
-            key = (boundary["kind"], tuple(sorted(boundary["source_span"].items())))
-            if key not in existing_boundaries:
-                card["boundaries"].append(boundary)
-                existing_boundaries.add(key)
-        card["diagnostics"].extend(effects.diagnostics)
-        from .returns import analyze_returns
-
-        returns = analyze_returns(file_path, node, card["boundaries"])
-        card["claims"].extend(returns.claims)
-        card["diagnostics"].extend(returns.diagnostics)
+        evidence = analyze_one_hop(file_path, tree, node)
+        card["claims"].extend(evidence.claims)
+        card["boundaries"].extend(evidence.boundaries)
+        card["diagnostics"].extend(evidence.diagnostics)
     return card

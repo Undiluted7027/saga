@@ -16,6 +16,20 @@ def _compact_domain(domain: Any) -> str:
     return str(domain.get("kind", "unknown"))
 
 
+def _local_call_chain(lines: list[str], chain: list[dict[str, Any]]) -> None:
+    """Render navigable locations for evidence propagated from a local callee."""
+    for link in chain:
+        call_site = link["call_site"]
+        callee_span = link["callee_span"]
+        lines.append(
+            f"    Local call: {link['caller']} -> {link['callee']} at "
+            f"{call_site['path']}:{call_site['start_line']}; callee at {callee_span['path']}:{callee_span['start_line']}"
+        )
+        if link["argument_bindings"]:
+            bindings = ", ".join(f"{item['parameter']} = {item['argument']}" for item in link["argument_bindings"])
+            lines.append(f"      Arguments: {bindings}")
+
+
 def terminal(card: dict[str, Any]) -> str:
     """Render the structured card for concise terminal inspection."""
     target = card["target"]
@@ -37,6 +51,7 @@ def terminal(card: dict[str, Any]) -> str:
         lines.append(f"    Method: {claim['evidence']['method']}")
         if claim["boundary_ids"]:
             lines.append(f"    Limited by: {', '.join(claim['boundary_ids'])}")
+        _local_call_chain(lines, claim.get("call_chain", []))
         if claim["evidence"]["evidence_class"] == "observed":
             detail = claim["evidence"].get("detail", {})
             lines.append(f"    Support: {detail.get('support', 0)} distinct inputs")
@@ -61,10 +76,12 @@ def terminal(card: dict[str, Any]) -> str:
     for boundary in important_boundaries:
         span = boundary["source_span"]
         lines.append(f"  Boundary [{boundary['kind']}] {boundary['target']['text']} at {span['path']}:{span['start_line']}: {boundary['reason']}")
+        _local_call_chain(lines, boundary.get("call_chain", []))
     if routine_boundaries:
         targets = ", ".join(boundary["target"]["text"] for boundary in routine_boundaries[:6])
         suffix = " ..." if len(routine_boundaries) > 6 else ""
         lines.append(f"  Routine unresolved calls ({len(routine_boundaries)}): {targets}{suffix}")
     for diagnostic in card["diagnostics"]:
         lines.append(f"  Diagnostic [{diagnostic['kind']}]: {diagnostic['message']}")
+        _local_call_chain(lines, diagnostic.get("call_chain", []))
     return "\n".join(lines)

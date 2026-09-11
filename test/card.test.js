@@ -40,6 +40,14 @@ test('editor claim presentation keeps wording and supporting evidence together',
   assert.deepEqual(view.sourceSpans, claim.source_spans);
 });
 
+test('editor claim presentation preserves a local call chain', () => {
+  const claim = structuredClone(loadCard().claims.find((item) => item.kind === 'return_dependency'));
+  claim.call_chain = [{ caller: 'process_order', callee: 'lookup_tax', invoked_as: 'lookup_tax', via_alias: false, call_site: claim.source_spans[0], callee_span: claim.source_spans[1], argument_bindings: [{ parameter: 'tax_rate', argument: 'tax_rate', source_span: claim.source_spans[0] }] }];
+  const view = claimPresentation(claim);
+  assert.equal(view.callChain[0].callee, 'lookup_tax');
+  assert.equal(view.callChain[0].argument_bindings[0].parameter, 'tax_rate');
+});
+
 test('invalid cards produce actionable validation errors', () => {
   assert.deepEqual(validateCard({}), ['missing schema_version', 'missing target', 'missing claims', 'missing boundaries', 'missing diagnostics', 'schema_version must be 0.1', 'target.status must be supported or unsupported', 'claims must be an array', 'boundaries must be an array']);
 });
