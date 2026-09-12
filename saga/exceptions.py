@@ -276,6 +276,7 @@ class _ExceptionAnalyzer:
                         "unsupported_semantics",
                         "A bare raise outside a statically visible exception handler cannot be described as a re-raise.",
                         _span(self.path, node),
+                        "exceptions",
                     )
                 )
             elif node.exc is None and caught_names != ("*",):
@@ -349,6 +350,7 @@ class _ExceptionAnalyzer:
                     "unsupported_semantics",
                     "Exception-group matching through except* is outside the explicit exception model.",
                     _span(self.path, node),
+                    "exceptions",
                 )
             )
             return [

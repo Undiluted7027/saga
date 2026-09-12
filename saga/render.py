@@ -211,7 +211,7 @@ def terminal(
         reports = "report" if group["report_count"] == 1 else "reports"
         sites = "site" if group["site_count"] == 1 else "sites"
         lines.append(
-            f"  Diagnostic [{group['kind']}] — {group['report_count']} {reports} "
+            f"  Diagnostic [{group['kind']} · {', '.join(group['analyses'])}] — {group['report_count']} {reports} "
             f"at {group['site_count']} {sites}: {group['message']}"
         )
         if group["report_count"] > 1 and not show_diagnostic_sites:
@@ -224,4 +224,6 @@ def terminal(
             if span:
                 lines.append(f"    Source: {span['path']}:{span['start_line']}")
             _local_call_chain(lines, occurrence["call_chain"])
+    if card.get("hidden_diagnostics"):
+        lines.append(f"  Hidden diagnostics: {card['hidden_diagnostics']['message']}")
     return "\n".join(lines)

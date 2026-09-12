@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from .diagnostics import group_diagnostics
+
 ViewName = Literal["full", "return", "mutation", "failure", "boundary"]
 
 VIEW_CLAIMS: dict[ViewName, set[str] | None] = {
@@ -13,6 +15,24 @@ VIEW_CLAIMS: dict[ViewName, set[str] | None] = {
     "failure": {"rejected_input", "explicit_exception"},
     "boundary": set(),
 }
+
+VIEW_DIAGNOSTIC_ANALYSES: dict[ViewName, set[str] | None] = {
+    "full": None,
+    "return": {"inspection", "returns"},
+    "mutation": {"inspection", "effects"},
+    "failure": {"inspection", "guards", "exceptions"},
+    "boundary": {"inspection"},
+}
+
+
+def _hidden_diagnostic_summary(group_count: int) -> dict[str, Any]:
+    """Build the shared pointer from a focused view back to the full card."""
+    noun = "group" if group_count == 1 else "groups"
+    return {
+        "group_count": group_count,
+        "message": f"{group_count} diagnostic {noun} hidden; open the full card to inspect them.",
+    }
+
 
 VIEW_LABELS: dict[ViewName, str] = {
     "full": "Full evidence card",
@@ -64,13 +84,28 @@ def focus_card(card: dict[str, Any], view: ViewName) -> dict[str, Any]:
             if boundary["id"] in related_ids
             or (view == "mutation" and "effects" in boundary.get("concerns", []))
         ]
-    return {
+    relevant_analyses = VIEW_DIAGNOSTIC_ANALYSES[view]
+    assert relevant_analyses is not None
+    diagnostics = [
+        diagnostic
+        for diagnostic in card["diagnostics"]
+        if relevant_analyses & set(diagnostic.get("analyses", ["inspection"]))
+    ]
+    hidden = [diagnostic for diagnostic in card["diagnostics"] if diagnostic not in diagnostics]
+    focused = {
         **card,
         "view": view,
         "claims": claims,
         "boundaries": boundaries,
-        "diagnostics": list(card["diagnostics"]),
+        "diagnostics": diagnostics,
     }
+    if hidden:
+        focused["hidden_diagnostics"] = _hidden_diagnostic_summary(
+            len(group_diagnostics({"diagnostics": hidden}))
+        )
+    else:
+        focused.pop("hidden_diagnostics", None)
+    return focused
 
 
 def view_is_empty(card: dict[str, Any]) -> bool:

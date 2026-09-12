@@ -1,4 +1,4 @@
-"""Presentation-only grouping for raw analysis diagnostics."""
+"""Diagnostic identity, provenance-preserving deduplication, and grouping."""
 
 from __future__ import annotations
 
@@ -27,6 +27,34 @@ def _occurrence_key(diagnostic: dict[str, Any]) -> tuple[Any, ...]:
     return (_span_key(diagnostic.get("source_span")), chain)
 
 
+def deduplicate_diagnostics(
+    diagnostics: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Remove repeated producer reports without erasing analysis provenance."""
+    result: list[dict[str, Any]] = []
+    by_key: dict[tuple[str, str, tuple[Any, ...] | None], dict[str, Any]] = {}
+    for diagnostic in diagnostics:
+        key = (
+            diagnostic["kind"],
+            diagnostic["message"],
+            _span_key(diagnostic.get("source_span")),
+        )
+        retained = by_key.get(key)
+        if retained is None:
+            retained = {
+                **diagnostic,
+                "analyses": sorted(set(diagnostic.get("analyses", ["inspection"]))),
+            }
+            by_key[key] = retained
+            result.append(retained)
+            continue
+        retained["analyses"] = sorted({
+            *retained.get("analyses", []),
+            *diagnostic.get("analyses", ["inspection"]),
+        })
+    return result
+
+
 def group_diagnostics(card: dict[str, Any]) -> list[dict[str, Any]]:
     """Group equal diagnostics while preserving raw reports on the card."""
     groups: list[dict[str, Any]] = []
@@ -39,6 +67,7 @@ def group_diagnostics(card: dict[str, Any]) -> list[dict[str, Any]]:
             group = {
                 "kind": diagnostic["kind"],
                 "message": diagnostic["message"],
+                "analyses": [],
                 "report_count": 0,
                 "occurrences": [],
             }
@@ -46,6 +75,10 @@ def group_diagnostics(card: dict[str, Any]) -> list[dict[str, Any]]:
             occurrence_keys[key] = set()
             groups.append(group)
         group["report_count"] += 1
+        group["analyses"] = sorted({
+            *group["analyses"],
+            *diagnostic.get("analyses", ["inspection"]),
+        })
         occurrence_key = _occurrence_key(diagnostic)
         if occurrence_key not in occurrence_keys[key]:
             occurrence_keys[key].add(occurrence_key)

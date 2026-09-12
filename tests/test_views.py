@@ -167,10 +167,49 @@ class FocusedViewTests(unittest.TestCase):
         )
         full = inspect_function(str(partial_path), "target")
         self.assertTrue(full["diagnostics"])
+        focused = focus_card(full, "return")
         self.assertEqual(
-            focus_card(full, "return")["diagnostics"],
-            full["diagnostics"],
+            {analysis for item in focused["diagnostics"] for analysis in item["analyses"]},
+            {"returns"},
         )
+        self.assertEqual(focused["hidden_diagnostics"]["group_count"], 1)
+        self.assertIn("open the full card", focused["hidden_diagnostics"]["message"])
+        self.assertIn(focused["hidden_diagnostics"]["message"], terminal(focused))
+
+    def test_each_focused_view_keeps_only_relevant_diagnostic_analyses(self):
+        path = Path(self.tempdir.name) / "diagnostic_views.py"
+        path.write_text(
+            "def target(state, items):\n"
+            "    for item in items:\n"
+            "        try:\n"
+            "            state.value = item\n"
+            "        except ValueError:\n"
+            "            continue\n"
+            "    return state\n",
+            encoding="utf-8",
+        )
+        full = inspect_function(str(path), "target")
+        expected = {
+            "return": {"returns"},
+            "mutation": {"effects"},
+            "failure": set(),
+            "boundary": set(),
+        }
+        for view, analyses in expected.items():
+            with self.subTest(view=view):
+                focused = focus_card(full, view)
+                retained = {
+                    analysis
+                    for diagnostic in focused["diagnostics"]
+                    for analysis in diagnostic["analyses"]
+                }
+                self.assertEqual(retained, analyses)
+                self.assertIn("hidden_diagnostics", focused)
+        mutation = focus_card(full, "mutation")
+        self.assertEqual(len(mutation["diagnostics"]), 1)
+        self.assertIn("Try/except effect", mutation["diagnostics"][0]["message"])
+        self.assertFalse(any("Continue" in item["message"] for item in mutation["diagnostics"]))
+        self.assertGreater(len(full["diagnostics"]), len(mutation["diagnostics"]))
 
     def test_empty_view_disclaims_absence_and_points_to_full_card(self):
         empty_path = Path(self.tempdir.name) / "empty.py"

@@ -41,22 +41,22 @@ def run_tests(selector: str, pytest_args: list[str], trace_output: str = ".saga/
     try:
         process = subprocess.run([sys.executable, "-m", "pytest", "-p", "saga.pytest_plugin", *pytest_args], cwd=cwd, env=environment, capture_output=True, text=True)
     except OSError as exc:
-        card["diagnostics"].append({"kind": "test_run", "message": f"Could not start pytest: {exc}"})
+        card["diagnostics"].append({"kind": "test_run", "message": f"Could not start pytest: {exc}", "analyses": ["observations"]})
         return card, 1
     finally:
         settings_path.unlink(missing_ok=True)
     if process.returncode != 0:
-        card["diagnostics"].append({"kind": "test_run", "message": f"Pytest exited with status {process.returncode}."})
+        card["diagnostics"].append({"kind": "test_run", "message": f"Pytest exited with status {process.returncode}.", "analyses": ["observations"]})
     if not destination.exists():
-        card["diagnostics"].append({"kind": "instrumentation", "message": "Saga did not receive a trace from pytest."})
+        card["diagnostics"].append({"kind": "instrumentation", "message": "Saga did not receive a trace from pytest.", "analyses": ["observations"]})
         return card, process.returncode or 1
     try:
         trace = json.loads(destination.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        card["diagnostics"].append({"kind": "instrumentation", "message": f"Could not read the Saga trace: {exc}"})
+        card["diagnostics"].append({"kind": "instrumentation", "message": f"Could not read the Saga trace: {exc}", "analyses": ["observations"]})
         return card, process.returncode or 1
     if trace.get("trace_schema_version") != TRACE_SCHEMA_VERSION:
-        card["diagnostics"].append({"kind": "instrumentation", "message": "Saga received an unsupported trace schema version."})
+        card["diagnostics"].append({"kind": "instrumentation", "message": "Saga received an unsupported trace schema version.", "analyses": ["observations"]})
         return card, process.returncode or 1
     observations = evaluate_observations(card, trace)
     card["claims"].extend(observations.claims)

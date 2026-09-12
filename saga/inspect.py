@@ -42,9 +42,18 @@ def _span(path: str, node: ast.AST) -> Span:
     )
 
 
-def _diagnostic(kind: str, message: str, source_span: Span | None = None) -> dict[str, Any]:
+def _diagnostic(
+    kind: str,
+    message: str,
+    source_span: Span | None = None,
+    analysis: str = "inspection",
+) -> dict[str, Any]:
     """Build a diagnostic and attach a source span when one is available."""
-    result: dict[str, Any] = {"kind": kind, "message": message}
+    result: dict[str, Any] = {
+        "kind": kind,
+        "message": message,
+        "analyses": [analysis],
+    }
     if source_span:
         result["source_span"] = source_span.as_dict()
     return result

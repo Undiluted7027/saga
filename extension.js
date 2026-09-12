@@ -118,7 +118,7 @@ function panelHtml(card, panel) {
     const sites = group.occurrences.map((occurrence) => { const source = occurrence.sourceSpan ? `<a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(occurrence.sourceSpan))}">${esc(`${occurrence.sourceSpan.path}:${occurrence.sourceSpan.start_line}`)}</a>` : 'No source location'; return `<li>${source}${renderCallChain(occurrence.callChain)}</li>`; }).join('');
     const count = `${group.reportCount} report${group.reportCount === 1 ? '' : 's'} at ${group.siteCount} source site${group.siteCount === 1 ? '' : 's'}`;
     const locations = group.reportCount > 1 ? `<details><summary>${esc(count)}</summary><ol>${sites}</ol></details>` : `<ol>${sites}</ol>`;
-    return `<article class="diagnostic"><h3>${esc(group.kind)}</h3><p>${esc(group.message)}</p>${locations}</article>`;
+    return `<article class="diagnostic"><h3>${esc(group.kind)} <em>${esc(group.analyses.join(', '))}</em></h3><p>${esc(group.message)}</p>${locations}</article>`;
   }).join('');
   const observationStatus = card.observation_status;
   const observationSummary = observationStatus
@@ -131,8 +131,9 @@ function panelHtml(card, panel) {
   const focusedClaims = view.name === 'boundary' ? '' : `<h2>${esc(view.label)}</h2>${empty || renderClaims(card.claims)}`;
   const focusedBoundaries = `<h2>${view.name === 'boundary' ? 'Analysis boundaries' : 'Related boundaries'}</h2>${view.name === 'boundary' && empty ? empty : boundaries || '<p>None limit this evidence.</p>'}`;
   const focusedDiagnostics = diagnostics ? `<h2>Target diagnostics</h2>${diagnostics}` : '';
+  const hiddenDiagnostics = view.hiddenDiagnosticMessage ? `<p class="diagnostic-pointer">${esc(view.hiddenDiagnosticMessage)}</p>` : '';
   const focusedObservationStatus = observationStatus ? `<h2>Test observation status</h2>${observationSummary}` : '';
-  const content = view.name === 'full' ? fullContent : focusedClaims + focusedBoundaries + focusedObservationStatus + focusedDiagnostics;
+  const content = view.name === 'full' ? fullContent : focusedClaims + focusedBoundaries + focusedObservationStatus + focusedDiagnostics + hiddenDiagnostics;
   return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${panel.webview.cspSource};"><style>body{font-family:var(--vscode-font-family);padding:0 2em;line-height:1.45}h1{font-size:1.35em}h3{margin-bottom:.25em;text-transform:capitalize}nav{margin:.8em 0}.empty{border-left:3px solid var(--vscode-editorWarning-foreground);padding:.6em 1em}article{border-top:1px solid var(--vscode-panel-border);padding:.7em 0}em{font-size:.75em;font-weight:normal;background:var(--vscode-textBlockQuote-background);padding:.15em .4em}.boundary{border-left:3px solid var(--vscode-editorWarning-foreground);padding-left:1em}.diagnostic{border-left:3px solid var(--vscode-editorError-foreground);padding-left:1em}.observation-status{border-left:3px solid var(--vscode-editorInfo-foreground);padding-left:1em}small{display:block;color:var(--vscode-descriptionForeground)}pre{white-space:pre-wrap}</style></head><body><h1>${esc(card.target.name)} · ${esc(view.label)}</h1><p><code>${esc(card.target.signature)}</code></p>${navigation}<p><a href="command:saga.runTests?${request(view.name)}">Run tests for this function</a></p>${content}</body></html>`;
 }
 

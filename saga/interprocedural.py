@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .effects import analyze_effects
+from .diagnostics import deduplicate_diagnostics
 from .exceptions import analyze_exceptions, filter_call_exception
 from .guards import analyze_guards
 from .inspect import _span
@@ -679,7 +680,12 @@ def _analyze_direct(
     evidence = FunctionEvidence(
         [*direct_claims, *returns.claims],
         [*boundaries, *returns.boundaries],
-        [*guard_diagnostics, *exceptions.diagnostics, *effects.diagnostics, *returns.diagnostics],
+        deduplicate_diagnostics([
+            *guard_diagnostics,
+            *exceptions.diagnostics,
+            *effects.diagnostics,
+            *returns.diagnostics,
+        ]),
     )
     return evidence, resolutions
 

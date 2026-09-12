@@ -8,6 +8,21 @@ const VIEW_CLAIMS = {
   boundary: new Set()
 };
 
+const VIEW_DIAGNOSTIC_ANALYSES = {
+  return: new Set(['inspection', 'returns']),
+  mutation: new Set(['inspection', 'effects']),
+  failure: new Set(['inspection', 'guards', 'exceptions']),
+  boundary: new Set(['inspection'])
+};
+
+function hiddenDiagnosticSummary(groupCount) {
+  const noun = groupCount === 1 ? 'group' : 'groups';
+  return {
+    group_count: groupCount,
+    message: `${groupCount} diagnostic ${noun} hidden; open the full card to inspect them.`
+  };
+}
+
 const VIEW_LABELS = {
   full: 'Full evidence card',
   return: 'Return dependencies',
@@ -81,7 +96,21 @@ function focusCard(card, view = 'full') {
   const boundaries = view === 'boundary'
     ? [...card.boundaries]
     : card.boundaries.filter((boundary) => relatedIds.has(boundary.id) || (view === 'mutation' && boundary.concerns?.includes('effects')));
-  return { ...card, view, claims, boundaries, diagnostics: [...card.diagnostics] };
+  const relevantAnalyses = VIEW_DIAGNOSTIC_ANALYSES[view];
+  const diagnostics = card.diagnostics.filter((diagnostic) =>
+    (diagnostic.analyses || ['inspection']).some((analysis) => relevantAnalyses.has(analysis))
+  );
+  const diagnosticSet = new Set(diagnostics);
+  const hidden = card.diagnostics.filter((diagnostic) => !diagnosticSet.has(diagnostic));
+  const focused = { ...card, view, claims, boundaries, diagnostics };
+  if (hidden.length) {
+    focused.hidden_diagnostics = hiddenDiagnosticSummary(
+      diagnosticGroups({ diagnostics: hidden }).length
+    );
+  } else {
+    delete focused.hidden_diagnostics;
+  }
+  return focused;
 }
 
 function viewPresentation(card) {
@@ -92,7 +121,8 @@ function viewPresentation(card) {
     name: view,
     label: VIEW_LABELS[view],
     empty,
-    emptyMessage: empty ? EMPTY_MESSAGES[view] : undefined
+    emptyMessage: empty ? EMPTY_MESSAGES[view] : undefined,
+    hiddenDiagnosticMessage: card.hidden_diagnostics?.message
   };
 }
 
@@ -167,11 +197,15 @@ function diagnosticGroups(card) {
     const key = JSON.stringify([diagnostic.kind, diagnostic.message]);
     let group = byKey.get(key);
     if (!group) {
-      group = { kind: diagnostic.kind, message: diagnostic.message, reportCount: 0, occurrences: [], occurrenceKeys: new Set() };
+      group = { kind: diagnostic.kind, message: diagnostic.message, analyses: [], reportCount: 0, occurrences: [], occurrenceKeys: new Set() };
       byKey.set(key, group);
       groups.push(group);
     }
     group.reportCount += 1;
+    group.analyses = [...new Set([
+      ...group.analyses,
+      ...(diagnostic.analyses || ['inspection'])
+    ])].sort();
     const occurrenceKey = JSON.stringify([
       diagnostic.source_span || null,
       (diagnostic.call_chain || []).map((link) => link.call_site)

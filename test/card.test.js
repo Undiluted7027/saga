@@ -215,6 +215,19 @@ test('focused editor view keeps analysis diagnostics', () => {
   assert.equal(focusCard(card, 'return').diagnostics[0].kind, 'unsupported_syntax');
 });
 
+test('focused editor views filter diagnostics and point back to the full card', () => {
+  const card = loadCard();
+  card.diagnostics = [
+    { kind: 'unsupported_semantics', message: 'Return gap.', analyses: ['returns'], source_span: card.target.source_span },
+    { kind: 'unsupported_semantics', message: 'Effect gap.', analyses: ['effects'], source_span: card.claims[0].source_spans[0] }
+  ];
+  const mutation = focusCard(card, 'mutation');
+  assert.deepEqual(mutation.diagnostics.map((item) => item.message), ['Effect gap.']);
+  assert.equal(mutation.hidden_diagnostics.group_count, 1);
+  assert.equal(viewPresentation(mutation).hiddenDiagnosticMessage, '1 diagnostic group hidden; open the full card to inspect them.');
+  assert.equal(focusCard(card, 'full'), card);
+});
+
 test('extension contributes all four focused view actions', () => {
   const manifest = JSON.parse(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'package.json'), 'utf8'));
   const commands = new Set(manifest.contributes.commands.map((item) => item.command));

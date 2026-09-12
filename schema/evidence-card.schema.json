@@ -11,6 +11,7 @@
     "claims": { "type": "array", "items": { "$ref": "#/$defs/claim" } },
     "boundaries": { "type": "array", "items": { "$ref": "#/$defs/boundary" } },
     "diagnostics": { "type": "array", "items": { "$ref": "#/$defs/diagnostic" } },
+    "hidden_diagnostics": { "type": "object", "required": ["group_count", "message"], "properties": { "group_count": { "type": "integer", "minimum": 1 }, "message": { "type": "string" } } },
     "observation_status": { "$ref": "#/$defs/observationStatus" }
   },
   "$defs": {
@@ -60,6 +61,6 @@
       }
     },
     "boundary": { "type": "object", "required": ["id", "kind", "target", "reason", "source_span"], "properties": { "id": { "type": "string" }, "kind": { "enum": ["unresolved_call", "dynamic_dispatch", "assignment_hooks", "unsupported_semantics", "exception_dispatch", "exception_matching", "local_call_limit", "unsupported_local_callee", "ambiguous_local_callee"] }, "target": { "type": "object", "required": ["text"], "properties": { "text": { "type": "string" } } }, "reason": { "type": "string" }, "category": { "enum": ["important", "routine"] }, "concerns": { "type": "array", "items": { "enum": ["effects"] }, "uniqueItems": true }, "boundary_ids": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }, "callee_origin": { "type": "object", "required": ["kind", "name", "function"], "properties": { "kind": { "const": "parameter" }, "name": { "type": "string" }, "function": { "type": "string" } } }, "source_span": { "$ref": "#/$defs/span" }, "call_chain": { "type": "array", "items": { "$ref": "#/$defs/callLink" } } } },
-    "diagnostic": { "type": "object", "required": ["kind", "message"], "properties": { "kind": { "type": "string" }, "message": { "type": "string" }, "source_span": { "$ref": "#/$defs/span" }, "call_chain": { "type": "array", "items": { "$ref": "#/$defs/callLink" } } } }
+    "diagnostic": { "type": "object", "required": ["kind", "message"], "properties": { "kind": { "type": "string" }, "message": { "type": "string" }, "analyses": { "type": "array", "items": { "enum": ["inspection", "guards", "effects", "returns", "exceptions", "observations"] }, "uniqueItems": true }, "source_span": { "$ref": "#/$defs/span" }, "call_chain": { "type": "array", "items": { "$ref": "#/$defs/callLink" } } } }
   }
 }

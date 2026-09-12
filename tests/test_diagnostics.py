@@ -1,7 +1,10 @@
 import copy
+import tempfile
 import unittest
+from pathlib import Path
 
-from saga.diagnostics import group_diagnostics
+from saga.diagnostics import deduplicate_diagnostics, group_diagnostics
+from saga.inspect import inspect_function
 from saga.render import terminal
 
 
@@ -59,6 +62,45 @@ class DiagnosticGroupingTests(unittest.TestCase):
             {"kind": "instrumentation", "message": "Try is unsupported.", "source_span": span(4)},
         ]))
         self.assertEqual(len(groups), 3)
+
+    def test_producer_deduplication_uses_kind_message_and_exact_span(self):
+        repeated = {"kind": "unsupported_semantics", "message": "Continue is unsupported.", "analyses": ["returns"], "source_span": span(8)}
+        other_analysis = {**copy.deepcopy(repeated), "analyses": ["effects"]}
+        other_site = {**copy.deepcopy(repeated), "source_span": span(12)}
+        result = deduplicate_diagnostics([repeated, copy.deepcopy(repeated), other_analysis, other_site])
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]["analyses"], ["effects", "returns"])
+        self.assertEqual([item["source_span"]["start_line"] for item in result], [8, 12])
+
+    def test_nested_control_flow_keeps_four_distinct_continue_sites(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "billing.py"
+            path.write_text(
+                "def bill(records, declined):\n"
+                "    for record in records:\n"
+                "        try:\n"
+                "            if record == 1:\n"
+                "                continue\n"
+                "            if record == 2:\n"
+                "                continue\n"
+                "        except ValueError:\n"
+                "            continue\n"
+                "        finally:\n"
+                "            if record == 3:\n"
+                "                continue\n"
+                "    return declined\n",
+                encoding="utf-8",
+            )
+            card = inspect_function(str(path), "bill")
+        continues = [
+            diagnostic for diagnostic in card["diagnostics"]
+            if diagnostic["message"].startswith("Continue semantics")
+        ]
+        self.assertEqual(len(continues), 4)
+        self.assertEqual(
+            {item["source_span"]["start_line"] for item in continues},
+            {5, 7, 9, 12},
+        )
 
     def test_terminal_collapses_repeated_reports_and_can_expand_sites(self):
         raw = card([

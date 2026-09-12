@@ -188,7 +188,7 @@ class _EffectScanner(ast.NodeVisitor):
             return
         structured = _target(target)
         if structured is None:
-            self.result.diagnostics.append(_diagnostic("unsupported_semantics", "This assignment target is outside the Slice 3 write model.", _span(self.path, target)))
+            self.result.diagnostics.append(_diagnostic("unsupported_semantics", "This assignment target is outside the Slice 3 write model.", _span(self.path, target), "effects"))
             return
         if isinstance(target, ast.Name) and target.id not in self.globals:
             return
@@ -285,13 +285,13 @@ class _EffectScanner(ast.NodeVisitor):
 
     def visit_With(self, node: ast.With) -> None:
         """Report context-manager semantics that the POC does not model."""
-        self.result.diagnostics.append(_diagnostic("unsupported_semantics", "Context-manager effects are outside the Slice 3 model.", _span(self.path, node)))
+        self.result.diagnostics.append(_diagnostic("unsupported_semantics", "Context-manager effects are outside the Slice 3 model.", _span(self.path, node), "effects"))
 
     visit_AsyncWith = visit_With
 
     def visit_Try(self, node: ast.Try) -> None:
         """Inspect every try block while preserving exception-flow uncertainty."""
-        self.result.diagnostics.append(_diagnostic("unsupported_semantics", "Try/except effect control flow is outside the Slice 3 model.", _span(self.path, node)))
+        self.result.diagnostics.append(_diagnostic("unsupported_semantics", "Try/except effect control flow is outside the Slice 3 model.", _span(self.path, node), "effects"))
         boundary = _boundary(
             self.path,
             node,
@@ -323,21 +323,21 @@ class _EffectScanner(ast.NodeVisitor):
 
     def visit_While(self, node: ast.While) -> None:
         """Report while-loop semantics because only for loops are in the supported subset."""
-        self.result.diagnostics.append(_diagnostic("unsupported_semantics", "While-loop analysis is outside the Slice 3 model.", _span(self.path, node)))
+        self.result.diagnostics.append(_diagnostic("unsupported_semantics", "While-loop analysis is outside the Slice 3 model.", _span(self.path, node), "effects"))
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         """Do not attribute nested-function effects to the selected target."""
-        self.result.diagnostics.append(_diagnostic("unsupported_semantics", "Nested function behavior is outside the Slice 3 model.", _span(self.path, node)))
+        self.result.diagnostics.append(_diagnostic("unsupported_semantics", "Nested function behavior is outside the Slice 3 model.", _span(self.path, node), "effects"))
 
     visit_AsyncFunctionDef = visit_FunctionDef
 
     def visit_Lambda(self, node: ast.Lambda) -> None:
         """Report lambda semantics instead of silently traversing dynamic code."""
-        self.result.diagnostics.append(_diagnostic("unsupported_semantics", "Lambda expressions are outside the Slice 3 model.", _span(self.path, node)))
+        self.result.diagnostics.append(_diagnostic("unsupported_semantics", "Lambda expressions are outside the Slice 3 model.", _span(self.path, node), "effects"))
 
     def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
         """Report assignment expressions because their write semantics are not modeled here."""
-        self.result.diagnostics.append(_diagnostic("unsupported_semantics", "Assignment expressions are outside the Slice 3 write model.", _span(self.path, node)))
+        self.result.diagnostics.append(_diagnostic("unsupported_semantics", "Assignment expressions are outside the Slice 3 write model.", _span(self.path, node), "effects"))
 
 
 def analyze_effects(path: str, tree: ast.Module, node: ast.FunctionDef) -> EffectResult:

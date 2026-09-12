@@ -172,7 +172,7 @@ def analyze_guards(path: str, node: ast.FunctionDef) -> tuple[list[dict[str, Any
         if isinstance(statement, ast.Assert):
             condition = _expression(path, statement.test, parameters)
             if condition.unsupported:
-                diagnostics.append(_diagnostic("unsupported_semantics", "The assertion condition contains a read or expression outside the Slice 2 model.", _span(path, statement.test)))
+                diagnostics.append(_diagnostic("unsupported_semantics", "The assertion condition contains a read or expression outside the Slice 2 model.", _span(path, statement.test), "guards"))
                 continue
             boundaries.extend(condition.boundaries)
             boundary_ids = [item["id"] for item in condition.boundaries]
@@ -185,10 +185,10 @@ def analyze_guards(path: str, node: ast.FunctionDef) -> tuple[list[dict[str, Any
             exception, error = _exception(path, raised)
             condition = _expression(path, statement.test, parameters)
             if error:
-                diagnostics.append(_diagnostic("unsupported_semantics", error, _span(path, raised)))
+                diagnostics.append(_diagnostic("unsupported_semantics", error, _span(path, raised), "guards"))
                 continue
             if condition.unsupported:
-                diagnostics.append(_diagnostic("unsupported_semantics", "The guard condition contains a read or expression outside the Slice 2 model.", _span(path, statement.test)))
+                diagnostics.append(_diagnostic("unsupported_semantics", "The guard condition contains a read or expression outside the Slice 2 model.", _span(path, statement.test), "guards"))
                 continue
             boundaries.extend(condition.boundaries)
             boundary_ids = [item["id"] for item in condition.boundaries]
@@ -202,7 +202,7 @@ def analyze_guards(path: str, node: ast.FunctionDef) -> tuple[list[dict[str, Any
         if isinstance(statement, ast.Raise):
             exception, error = _exception(path, statement)
             if error:
-                diagnostics.append(_diagnostic("unsupported_semantics", error, _span(path, statement)))
+                diagnostics.append(_diagnostic("unsupported_semantics", error, _span(path, statement), "guards"))
                 continue
             claims.append(_claim(f"exception-{statement.lineno}", "explicit_exception", f"Raises {exception['name']}.", {"type": "explicit_exception", "condition": None, "source_text": source_expression(statement), "exception": exception}, [_span(path, statement)], [], []))
             continue

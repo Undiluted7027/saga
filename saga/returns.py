@@ -222,7 +222,7 @@ def _unsupported_diagnostics(path: str, statement: ast.stmt) -> list[dict[str, A
         if isinstance(item, unsupported):
             key = (type(item).__name__, item.lineno, item.col_offset)
             if key not in seen:
-                diagnostics.append(_diagnostic("unsupported_semantics", f"{type(item).__name__} semantics are outside the Slice 4 return model.", _span(path, item)))
+                diagnostics.append(_diagnostic("unsupported_semantics", f"{type(item).__name__} semantics are outside the Slice 4 return model.", _span(path, item), "returns"))
                 seen.add(key)
     return diagnostics
 
