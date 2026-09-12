@@ -58,6 +58,7 @@ test('editor claim presentation preserves composed local return dependencies', (
   const claim = structuredClone(loadCard().claims.find((item) => item.kind === 'return_dependency'));
   claim.statement.local_call_dependencies = [{
     callee_parameter: 'price',
+    callee_scope: 'calculate_total',
     caller_argument: 'catalog[sku]',
     binding_origin: 'argument',
     caller_inputs: ['catalog'],
@@ -66,8 +67,10 @@ test('editor claim presentation preserves composed local return dependencies', (
     boundary_ids: [],
     call_chain: []
   }];
+  claim.statement.scope = { kind: 'callee', function: 'calculate_total', names: ['price'] };
   const view = claimPresentation(claim);
   assert.deepEqual(view.localCallDependencies, claim.statement.local_call_dependencies);
+  assert.deepEqual(view.scope, claim.statement.scope);
 });
 
 test('editor exception presentation preserves handler evidence', () => {

@@ -64,6 +64,7 @@ function claimPresentation(claim) {
     sourceSpans: [...claim.source_spans],
     dependencies: claim.statement.dependencies || [],
     localCallDependencies: claim.statement.local_call_dependencies || [],
+    scope: claim.statement.scope,
     condition: claim.statement.condition,
     handlerSpans: claim.statement.handler_spans || [],
     callChain: claim.call_chain || [],

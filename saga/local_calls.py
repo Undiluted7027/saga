@@ -14,6 +14,7 @@ ResolutionStatus = Literal[
     "hop_limit",
     "unsupported",
     "ambiguous",
+    "parameter",
     "shadowed",
     "external",
 ]
@@ -219,6 +220,18 @@ def resolve_local_calls(
     for statement in caller.body:
         scope.visit(statement)
     local_aliases = _local_aliases(caller, scope, module_bindings)
+    parameter_names = {
+        argument.arg
+        for argument in [
+            *caller.args.posonlyargs,
+            *caller.args.args,
+            *caller.args.kwonlyargs,
+        ]
+    }
+    if caller.args.vararg:
+        parameter_names.add(caller.args.vararg.arg)
+    if caller.args.kwarg:
+        parameter_names.add(caller.args.kwarg.arg)
 
     resolutions: list[LocalCallResolution] = []
     for call in scope.calls:
@@ -233,6 +246,15 @@ def resolve_local_calls(
         callee: ast.FunctionDef | ast.AsyncFunctionDef | None = None
         via_alias = False
         if name in scope.bindings:
+            rebound_before_call = any(
+                not isinstance(binding, ast.arg)
+                and (binding.lineno, binding.col_offset)
+                <= (call.lineno, call.col_offset)
+                for binding in scope.bindings[name]
+            )
+            if name in parameter_names and not rebound_before_call:
+                resolutions.append(LocalCallResolution(call, "parameter", invoked_as))
+                continue
             alias = local_aliases.get(name)
             if alias is None or alias[1].lineno >= call.lineno:
                 resolutions.append(LocalCallResolution(call, "shadowed", invoked_as))

@@ -95,6 +95,10 @@ def terminal(
         lines.append(f"  Claim [{label}; {claim['evidence']['evidence_class']}]: {statement['text']}")
         if statement.get("source_text"):
             lines.append(f"    Source syntax: {statement['source_text']}")
+        scope = statement.get("scope")
+        if scope and scope["kind"] == "callee":
+            names = f" ({', '.join(scope['names'])})" if scope["names"] else ""
+            lines.append(f"    Callee scope: {scope['function']}{names}")
         if statement.get("condition_source_text"):
             lines.append(f"    Condition syntax: {statement['condition_source_text']}")
         for handler_span in statement.get("handler_spans", []):
@@ -114,8 +118,8 @@ def terminal(
                 else ""
             )
             lines.append(
-                "    Through local call: "
-                f"{dependency['callee_parameter']} = {dependency['caller_argument']}"
+                "    Callee binding: "
+                f"{dependency['callee_scope']}.{dependency['callee_parameter']} = {dependency['caller_argument']}"
                 f" ({dependency['binding_origin']}{caller_inputs})"
             )
             _local_call_chain(lines, dependency["call_chain"])

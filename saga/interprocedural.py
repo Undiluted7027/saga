@@ -93,6 +93,7 @@ def _stopping_boundary(
         "hop_limit": "The call is module-local, but it is beyond Saga's one-hop analysis limit.",
         "unsupported": "The module-local callee uses a function form that Saga does not support.",
         "ambiguous": "The call name has more than one module-level binding, so Saga cannot choose a callee.",
+        "parameter": f"The callee is supplied through parameter '{resolution.invoked_as}'; Saga cannot inspect which callable is provided at runtime.",
         "shadowed": "The call name is bound in the caller, so Saga cannot treat it as the module-level function.",
     }
     kinds = {
@@ -100,6 +101,7 @@ def _stopping_boundary(
         "hop_limit": "local_call_limit",
         "unsupported": "unsupported_local_callee",
         "ambiguous": "ambiguous_local_callee",
+        "parameter": "unresolved_call",
         "shadowed": "unresolved_call",
     }
     boundary = {
@@ -112,6 +114,12 @@ def _stopping_boundary(
     }
     if resolution.callee is not None:
         boundary["call_chain"] = [call_record(path, caller, resolution)]
+    if resolution.status == "parameter":
+        boundary["callee_origin"] = {
+            "kind": "parameter",
+            "name": resolution.invoked_as,
+            "function": caller.name,
+        }
     return boundary
 
 
@@ -456,6 +464,7 @@ def _compose_return_dependencies(
         )
         composed.append({
             "callee_parameter": parameter,
+            "callee_scope": resolution.callee.name,
             "caller_argument": ast.unparse(argument),
             "binding_origin": origin,
             "caller_inputs": caller_inputs,
@@ -595,6 +604,17 @@ def _propagate_claim(
     result = deepcopy(claim)
     result["id"] = f"local-{resolution.call.lineno}-{resolution.call.col_offset}-{claim['id']}"
     result["statement"]["text"] = _propagated_text(resolution.invoked_as, claim)
+    scoped_names: set[str] = set()
+    for field in ("inputs", "definitions", "weak_definitions"):
+        scoped_names.update(result["statement"].get(field, []))
+    for dependency in result["statement"].get("dependencies", []):
+        scoped_names.update(dependency.get("names", []))
+        scoped_names.update(dependency.get("reads", []))
+    result["statement"]["scope"] = {
+        "kind": "callee",
+        "function": resolution.callee.name,
+        "names": sorted(scoped_names),
+    }
     chain = call_record(path, caller, resolution)
     result["call_chain"] = [chain, *claim.get("call_chain", [])]
     result["source_spans"] = _unique_spans([

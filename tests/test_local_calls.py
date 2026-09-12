@@ -47,13 +47,15 @@ class LocalCallTests(unittest.TestCase):
         self.assertEqual(caller_claim["statement"]["inputs"], ["raw"])
         dependency = caller_claim["statement"]["local_call_dependencies"][0]
         self.assertEqual(dependency["callee_parameter"], "value")
+        self.assertEqual(dependency["callee_scope"], "helper")
         self.assertEqual(dependency["caller_argument"], "raw")
         self.assertEqual(dependency["caller_inputs"], ["raw"])
         self.assertEqual(dependency["call_chain"][0], link)
         rendered = terminal(card)
         self.assertIn("Local call: caller -> helper", rendered)
         self.assertIn("Arguments: value = raw", rendered)
-        self.assertIn("Through local call: value = raw", rendered)
+        self.assertIn("Callee binding: helper.value = raw", rendered)
+        self.assertIn("Callee scope: helper (value)", rendered)
 
     def test_helper_propagates_write_effect_exception_and_boundary(self):
         card = self.inspect(
@@ -176,16 +178,37 @@ class LocalCallTests(unittest.TestCase):
         )
         self.assertFalse(self.propagated(early_alias, "return_dependency"))
 
-    def test_shadowed_names_and_attribute_calls_do_not_resolve(self):
+    def test_parameter_callables_and_shadowed_names_are_distinct(self):
+        parameter = self.inspect(
+            "def notify(value):\n"
+            "    return value\n\n"
+            "def caller(notify, value):\n"
+            "    return notify(value)\n"
+        )
+        self.assertFalse(self.propagated(parameter, "return_dependency"))
+        boundary = next(item for item in parameter["boundaries"] if item["kind"] == "unresolved_call")
+        self.assertIn("supplied through parameter 'notify'", boundary["reason"])
+        self.assertNotIn("module-level binding", boundary["reason"])
+        self.assertEqual(
+            boundary["callee_origin"],
+            {"kind": "parameter", "name": "notify", "function": "caller"},
+        )
+
         shadowed = self.inspect(
             "def helper(value):\n"
             "    return value\n\n"
-            "def caller(helper, value):\n"
+            "def replacement():\n"
+            "    return helper\n\n"
+            "def caller(value):\n"
+            "    helper = replacement()\n"
             "    return helper(value)\n"
         )
-        self.assertFalse(self.propagated(shadowed, "return_dependency"))
-        boundary = next(item for item in shadowed["boundaries"] if item["kind"] == "unresolved_call")
+        boundary = next(
+            item for item in shadowed["boundaries"]
+            if item["kind"] == "unresolved_call" and item["target"]["text"] == "helper(...)"
+        )
         self.assertIn("bound in the caller", boundary["reason"])
+        self.assertNotIn("callee_origin", boundary)
 
         attribute = self.inspect(
             "def helper(value):\n"
@@ -213,6 +236,44 @@ class LocalCallTests(unittest.TestCase):
             "            return helper(value)\n"
         )
         self.assertFalse(self.propagated(match_capture, "return_dependency"))
+
+    def test_propagated_return_names_are_labeled_with_callee_scope(self):
+        card = self.inspect(
+            "def choose_discount(customer_tier, subtotal):\n"
+            "    return subtotal if customer_tier else 0\n\n"
+            "def caller(tier, amount):\n"
+            "    return choose_discount(subtotal=amount, customer_tier=tier)\n"
+        )
+        propagated = self.propagated(card, "return_dependency")[0]
+        self.assertEqual(
+            propagated["statement"]["scope"],
+            {
+                "kind": "callee",
+                "function": "choose_discount",
+                "names": ["customer_tier", "subtotal"],
+            },
+        )
+        caller_claim = next(
+            claim for claim in card["claims"]
+            if claim["kind"] == "return_dependency" and not claim.get("call_chain")
+        )
+        dependencies = caller_claim["statement"]["local_call_dependencies"]
+        self.assertEqual(
+            {
+                item["callee_parameter"]: (
+                    item["callee_scope"],
+                    item["caller_argument"],
+                )
+                for item in dependencies
+            },
+            {
+                "customer_tier": ("choose_discount", "tier"),
+                "subtotal": ("choose_discount", "amount"),
+            },
+        )
+        rendered = terminal(card)
+        self.assertIn("Callee scope: choose_discount (customer_tier, subtotal)", rendered)
+        self.assertIn("Callee binding: choose_discount.customer_tier = tier", rendered)
 
     def test_non_shadowed_call_inside_comprehension_can_resolve(self):
         card = self.inspect(
