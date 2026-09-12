@@ -19,6 +19,7 @@ class CFGNode:
     statement: ast.stmt
     reads: set[str]
     definitions: set[str]
+    weak_definitions: set[str] = field(default_factory=set)
     controls: list[tuple[int, bool | None]] = field(default_factory=list)
     successors: set[int] = field(default_factory=set)
     predecessors: set[int] = field(default_factory=set)
@@ -26,17 +27,36 @@ class CFGNode:
 
 @dataclass
 class ReturnResult:
-    """Hold return claims and diagnostics produced by the intraprocedural model."""
+    """Hold return claims, boundaries, and diagnostics produced by the model."""
 
     claims: list[dict[str, Any]]
     diagnostics: list[dict[str, Any]]
+    boundaries: list[dict[str, Any]] = field(default_factory=list)
+
+
+_DEFERRED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+
+
+def _walk_current_scope(node: ast.AST):
+    """Yield node and its descendants, stopping at any nested def/class/lambda body.
+
+    A nested function, lambda, or class body does not execute along with the
+    statement that contains it, so a read or write inside one must not be
+    attributed to the enclosing statement or control-flow node. Calling this
+    directly on a deferred-scope node yields only that node.
+    """
+    yield node
+    if isinstance(node, _DEFERRED_SCOPES):
+        return
+    for child in ast.iter_child_nodes(node):
+        yield from _walk_current_scope(child)
 
 
 def _read_names(node: ast.AST | None) -> set[str]:
     """Collect lexically read names without inferring their runtime values."""
     if node is None:
         return set()
-    return {item.id for item in ast.walk(node) if isinstance(item, ast.Name) and isinstance(item.ctx, ast.Load)}
+    return {item.id for item in _walk_current_scope(node) if isinstance(item, ast.Name) and isinstance(item.ctx, ast.Load)}
 
 
 def _definition_names(node: ast.AST) -> set[str]:
@@ -50,6 +70,83 @@ def _definition_names(node: ast.AST) -> set[str]:
     for target in targets:
         names.update(item.id for item in ast.walk(target) if isinstance(item, ast.Name) and isinstance(item.ctx, (ast.Store, ast.Del)))
     return names
+
+
+_OPAQUE_WEAK_CONTAINERS = (ast.With, ast.AsyncWith, ast.Try, ast.TryStar, ast.While, ast.Match)
+
+
+def _write_root(node: ast.AST) -> str | None:
+    """Return the root name of an attribute/subscript access chain."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return _write_root(node.value)
+    if isinstance(node, ast.Subscript):
+        return _write_root(node.value)
+    return None
+
+
+def _mutating_call_roots(node: ast.AST) -> set[str]:
+    """Collect receiver root names from attribute-style calls in the current scope.
+
+    Saga does not model which methods mutate their receiver, so any call shaped
+    like ``name.method(...)`` is treated as a possible weak write to ``name``.
+    """
+    roots: set[str] = set()
+    for call in _walk_current_scope(node):
+        if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute):
+            root = _write_root(call.func.value)
+            if root is not None:
+                roots.add(root)
+    return roots
+
+
+def _assignment_write_roots(node: ast.AST) -> set[str]:
+    """Collect root names of attribute/subscript assignment targets in one statement."""
+    if not isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+        return set()
+    targets = list(node.targets) if isinstance(node, ast.Assign) else [node.target]
+    roots: set[str] = set()
+    for target in targets:
+        for item in ast.walk(target):
+            if isinstance(item, (ast.Attribute, ast.Subscript)):
+                root = _write_root(item)
+                if root is not None:
+                    roots.add(root)
+    return roots
+
+
+def _weak_definition_names(node: ast.stmt) -> set[str]:
+    """Collect root names weakly written by attribute/subscript writes or mutating calls.
+
+    A weak write does not prove that a name's value changed, so it must not
+    replace prior reaching definitions the way a plain name assignment does.
+    """
+    if isinstance(node, _OPAQUE_WEAK_CONTAINERS):
+        # This construct is represented as one coarse CFG node, so every
+        # nested write in the current scope is folded into a weak definition
+        # of this node instead of disappearing from the model entirely.
+        names = _mutating_call_roots(node)
+        for item in _walk_current_scope(node):
+            if isinstance(item, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                targets = list(item.targets) if isinstance(item, ast.Assign) else [item.target]
+                for target in targets:
+                    names.update(
+                        child.id
+                        for child in ast.walk(target)
+                        if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store)
+                    )
+                names.update(_assignment_write_roots(item))
+            elif isinstance(item, (ast.For, ast.AsyncFor)):
+                names.update(
+                    child.id
+                    for child in ast.walk(item.target)
+                    if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store)
+                )
+            elif isinstance(item, ast.MatchAs) and item.name:
+                names.add(item.name)
+        return names
+    return _mutating_call_roots(node) | _assignment_write_roots(node)
 
 
 def _node_reads(node: ast.stmt) -> set[str]:
@@ -71,9 +168,54 @@ def _node_reads(node: ast.stmt) -> set[str]:
     return {item for item in reads if item}
 
 
+def _flatten_assignment_targets(target: ast.AST) -> list[ast.AST]:
+    """Split a tuple/list assignment target into its independent sub-targets."""
+    if isinstance(target, (ast.Tuple, ast.List)):
+        flattened: list[ast.AST] = []
+        for element in target.elts:
+            flattened.extend(_flatten_assignment_targets(element))
+        return flattened
+    return [target]
+
+
+def _resolve_unresolved_targets(assignment: ast.Assign | ast.AnnAssign | ast.AugAssign) -> list[ast.AST]:
+    """Find one assignment's targets Saga cannot root to a plain local name."""
+    unresolved: list[ast.AST] = []
+    outer_targets = list(assignment.targets) if isinstance(assignment, ast.Assign) else [assignment.target]
+    for outer in outer_targets:
+        for target in _flatten_assignment_targets(outer):
+            if isinstance(target, (ast.Attribute, ast.Subscript)) and _write_root(target) is None:
+                unresolved.append(target)
+    return unresolved
+
+
+def _unresolved_write_targets(node: ast.stmt) -> list[ast.AST]:
+    """Find assignment targets Saga cannot root to a plain local name.
+
+    Saga does not perform alias analysis, so a target reached only through a
+    call, comparison, or other dynamic expression cannot be connected to a
+    return dependency at all. Reporting nothing here would look like proof of
+    independence rather than an analysis limit. A method call on a freshly
+    constructed value (``Path(x).write_text(...)``) is not a write to any
+    existing local name, so call receivers are deliberately not checked here.
+    A coarse control-flow node (with/try/while/match) is one CFG node for its
+    whole body, so nested assignments are checked in the current scope too.
+    """
+    if isinstance(node, _OPAQUE_WEAK_CONTAINERS):
+        return [
+            target
+            for item in _walk_current_scope(node)
+            if isinstance(item, (ast.Assign, ast.AnnAssign, ast.AugAssign))
+            for target in _resolve_unresolved_targets(item)
+        ]
+    if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+        return _resolve_unresolved_targets(node)
+    return []
+
+
 def _unsupported_diagnostics(path: str, statement: ast.stmt) -> list[dict[str, Any]]:
     """Report control or expression forms that the return model cannot represent."""
-    unsupported = (ast.While, ast.AsyncFor, ast.With, ast.AsyncWith, ast.Try, ast.Match, ast.Break, ast.Continue, ast.Lambda, ast.NamedExpr)
+    unsupported = (ast.While, ast.AsyncFor, ast.With, ast.AsyncWith, ast.Try, ast.TryStar, ast.Match, ast.Break, ast.Continue, ast.Lambda, ast.NamedExpr)
     diagnostics: list[dict[str, Any]] = []
     seen: set[tuple[str, int, int]] = set()
     for item in ast.walk(statement):
@@ -85,6 +227,25 @@ def _unsupported_diagnostics(path: str, statement: ast.stmt) -> list[dict[str, A
     return diagnostics
 
 
+def _unresolved_write_boundary(path: str, target: ast.AST) -> dict[str, Any]:
+    """Record a write Saga cannot root to a name as a boundary, not silence.
+
+    Saga does not perform alias analysis, so it cannot rule out that this
+    write changes a value some return depends on. The boundary is attached to
+    every return in the function rather than only the ones whose current
+    slice happens to reach it, since a claim of independence would need the
+    alias analysis this slice deliberately does not do.
+    """
+    return {
+        "id": f"return-boundary-{target.lineno}-{target.col_offset}-unresolved_write",
+        "kind": "unsupported_semantics",
+        "target": {"text": source_expression(target)},
+        "reason": "Saga cannot determine which name this write may change, so it cannot rule out an effect on a return value.",
+        "category": "important",
+        "source_span": _span(path, target).as_dict(),
+    }
+
+
 class _CFGBuilder:
     """Build statement nodes and conservative branch and loop edges."""
 
@@ -93,20 +254,39 @@ class _CFGBuilder:
         self.nodes: dict[int, CFGNode] = {}
         self.next_id = 0
         self.diagnostics: list[dict[str, Any]] = []
+        # Paired with the node that discovered them, so a return only gets
+        # limited by a write that can actually execute before it.
+        self.write_boundaries: list[tuple[int, dict[str, Any]]] = []
         self.gates_next: dict[int, bool] = {}
 
     def node(self, statement: ast.stmt, controls: list[tuple[int, bool | None]]) -> int:
         """Create one CFG node with lexical reads, definitions, and controllers."""
         node_id = self.next_id
         self.next_id += 1
-        self.nodes[node_id] = CFGNode(node_id, statement, _node_reads(statement), _definition_names(statement), list(controls))
+        strong = _definition_names(statement)
+        weak = _weak_definition_names(statement) - strong
+        self.nodes[node_id] = CFGNode(node_id, statement, _node_reads(statement), strong, weak, list(controls))
         self.diagnostics.extend(_unsupported_diagnostics(self.path, statement))
+        for target in _unresolved_write_targets(statement):
+            self.write_boundaries.append((node_id, _unresolved_write_boundary(self.path, target)))
         return node_id
 
     def edge(self, source: int, target: int) -> None:
         """Add a directed control-flow edge."""
         self.nodes[source].successors.add(target)
         self.nodes[target].predecessors.add(source)
+
+    def ancestors(self, node_id: int) -> set[int]:
+        """Return CFG nodes that may execute before this node."""
+        seen: set[int] = set()
+        stack = list(self.nodes[node_id].predecessors)
+        while stack:
+            current = stack.pop()
+            if current in seen:
+                continue
+            seen.add(current)
+            stack.extend(self.nodes[current].predecessors)
+        return seen
 
     def block(self, statements: list[ast.stmt], controls: list[tuple[int, bool | None]]) -> tuple[int | None, set[int]]:
         """Build a block and return its entry node and fall-through exits."""
@@ -178,6 +358,10 @@ def _dataflow(builder: _CFGBuilder) -> dict[int, dict[str, set[int]]]:
             transferred = {name: set(definitions) for name, definitions in merged.items()}
             for name in node.definitions:
                 transferred[name] = {node_id}
+            for name in node.weak_definitions:
+                # A weak write may not execute, so it adds a possible source
+                # without discarding the definitions that reached this point.
+                transferred.setdefault(name, set()).add(node_id)
             if incoming[node_id] != merged or outgoing[node_id] != transferred:
                 incoming[node_id] = merged
                 outgoing[node_id] = transferred
@@ -215,6 +399,7 @@ def _claim(path: str, return_node: CFGNode, included: set[int], builder: _CFGBui
     dependencies: list[dict[str, Any]] = []
     reads = set().union(*(builder.nodes[item].reads for item in ordered))
     definitions = set().union(*(builder.nodes[item].definitions for item in ordered))
+    weak_definitions = set().union(*(builder.nodes[item].weak_definitions for item in ordered))
     calls = [call for item in ordered for call in _call_details(path, builder.nodes[item].statement)]
     call_keys: set[tuple[str, tuple[tuple[str, Any], ...]]] = set()
     unique_calls = []
@@ -230,11 +415,14 @@ def _claim(path: str, return_node: CFGNode, included: set[int], builder: _CFGBui
             kind = "return"
         elif node.definitions:
             kind = "definition"
+        elif node.weak_definitions:
+            kind = "weak_definition"
         elif isinstance(node.statement, (ast.If, ast.For, ast.Assert)):
             kind = "control_predicate"
         else:
             kind = "statement"
-        dependencies.append({"kind": kind, "names": sorted(node.definitions), "reads": sorted(node.reads), "calls": _call_details(path, node.statement), "source_span": span})
+        names = sorted(node.definitions | node.weak_definitions)
+        dependencies.append({"kind": kind, "names": names, "reads": sorted(node.reads), "calls": _call_details(path, node.statement), "source_span": span})
     boundary_ids = []
     for boundary in boundaries:
         if any(_contains(span, boundary["source_span"]) for span in source_spans):
@@ -271,13 +459,33 @@ def _claim(path: str, return_node: CFGNode, included: set[int], builder: _CFGBui
     ]
     path_suffix = " when " + " and ".join(rendered_conditions) if rendered_conditions else ""
     summary = f"Returns {returned}{path_suffix}."
+    assumptions = [{"text": "The slice is intraprocedural and conservative; included statements may not affect every execution."}, *path_assumptions]
+    if weak_definitions:
+        assumptions.append({
+            "text": (
+                "Names changed only through an attribute, subscript, or method call are "
+                "included as a conservative over-approximation; Saga does not prove the "
+                "write executed or that it changed the value."
+            )
+        })
     return {
         "id": f"return-{return_node.statement.lineno}-{return_node.statement.col_offset}",
         "kind": "return_dependency",
-        "statement": {"text": summary, "type": "return_dependency", "source_text": returned, "return_expression": returned, "path_conditions": path_conditions, "inputs": inputs, "definitions": sorted(definitions), "calls": unique_calls, "dependencies": dependencies},
+        "statement": {
+            "text": summary,
+            "type": "return_dependency",
+            "source_text": returned,
+            "return_expression": returned,
+            "path_conditions": path_conditions,
+            "inputs": inputs,
+            "definitions": sorted(definitions),
+            "weak_definitions": sorted(weak_definitions),
+            "calls": unique_calls,
+            "dependencies": dependencies,
+        },
         "evidence": {"method": "intraprocedural_may_affect", "evidence_class": "derived", "detail": {"return_source_span": _span(path, return_node.statement).as_dict()}},
         "source_spans": source_spans,
-        "assumptions": [{"text": "The slice is intraprocedural and conservative; included statements may not affect every execution."}, *path_assumptions],
+        "assumptions": assumptions,
         "boundary_ids": boundary_ids,
     }
 
@@ -327,5 +535,15 @@ def analyze_returns(path: str, node: ast.FunctionDef, boundaries: list[dict[str,
                     if definition not in included:
                         included.add(definition)
                         worklist.append(definition)
-        claims.append(_claim(path, return_node, included, builder, boundaries, parameter_names))
-    return ReturnResult(claims, builder.diagnostics)
+        claim = _claim(path, return_node, included, builder, boundaries, parameter_names)
+        if builder.write_boundaries:
+            reachable = builder.ancestors(return_node.node_id)
+            relevant_ids = {
+                boundary["id"]
+                for write_node_id, boundary in builder.write_boundaries
+                if write_node_id in reachable
+            }
+            if relevant_ids:
+                claim["boundary_ids"] = sorted({*claim["boundary_ids"], *relevant_ids})
+        claims.append(claim)
+    return ReturnResult(claims, builder.diagnostics, [boundary for _, boundary in builder.write_boundaries])

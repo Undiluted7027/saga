@@ -98,6 +98,8 @@ def terminal(
             lines.append(f"    May use inputs: {', '.join(statement['inputs'])}")
         if statement.get("definitions"):
             lines.append(f"    May use local values: {', '.join(statement['definitions'])}")
+        if statement.get("weak_definitions"):
+            lines.append(f"    May be changed through attribute, subscript, or method access: {', '.join(statement['weak_definitions'])}")
         if statement.get("calls"):
             lines.append(f"    May use calls: {', '.join(call['text'] for call in statement['calls'])}")
         for dependency in statement.get("local_call_dependencies", []):

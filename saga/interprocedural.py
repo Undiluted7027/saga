@@ -630,7 +630,7 @@ def _analyze_direct(
     returns = analyze_returns(path, node, boundaries)
     evidence = FunctionEvidence(
         [*direct_claims, *returns.claims],
-        boundaries,
+        [*boundaries, *returns.boundaries],
         [*guard_diagnostics, *exceptions.diagnostics, *effects.diagnostics, *returns.diagnostics],
     )
     return evidence, resolutions

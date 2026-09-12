@@ -37,6 +37,7 @@
             "template": { "type": "string" },
             "inputs": { "type": "array", "items": { "type": "string" } },
             "definitions": { "type": "array", "items": { "type": "string" } },
+            "weak_definitions": { "type": "array", "items": { "type": "string" } },
             "calls": { "type": "array", "items": { "type": "object" } },
             "return_expression": { "type": "string" },
             "path_conditions": { "type": "array", "items": { "type": "object" } },

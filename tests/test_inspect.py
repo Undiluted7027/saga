@@ -234,6 +234,175 @@ class InspectFunctionTests(unittest.TestCase):
         self.assertEqual(card["target"]["status"], "unsupported")
         self.assertEqual(card["diagnostics"][0]["kind"], "unsupported_target")
 
+    def test_subscript_and_attribute_writes_reach_the_return(self):
+        path = self.write(
+            "def build(items, factor, sink):\n"
+            "    out = []\n"
+            "    for i in items:\n"
+            "        out.append(i * factor)\n"
+            "    sink.total = factor\n"
+            "    return out, sink\n"
+        )
+        card = inspect_function(path, "build")
+        claim = next(claim for claim in card["claims"] if claim["kind"] == "return_dependency")
+        self.assertIn("factor", claim["statement"]["inputs"])
+        lines = {span["start_line"] for span in claim["source_spans"]}
+        self.assertIn(4, lines)
+        self.assertIn(5, lines)
+        self.assertEqual(sorted(claim["statement"]["weak_definitions"]), ["out", "sink"])
+        boundary_kinds = {
+            boundary["kind"]
+            for boundary in card["boundaries"]
+            if boundary["id"] in claim["boundary_ids"]
+        }
+        self.assertIn("assignment_hooks", boundary_kinds)
+
+    def test_conditional_subscript_write_is_a_weak_definition(self):
+        path = self.write(
+            "def maybe_set(values, index, value, keep):\n"
+            "    if keep:\n"
+            "        values[index] = value\n"
+            "    return values\n"
+        )
+        card = inspect_function(path, "maybe_set")
+        claim = next(claim for claim in card["claims"] if claim["kind"] == "return_dependency")
+        self.assertIn("values", claim["statement"]["weak_definitions"])
+        self.assertIn("value", claim["statement"]["inputs"])
+        self.assertIn("index", claim["statement"]["inputs"])
+
+    def test_weak_write_does_not_discard_the_prior_strong_definition(self):
+        path = self.write(
+            "def build(seed):\n"
+            "    out = compute_default(seed)\n"
+            "    out.append(1)\n"
+            "    return out\n"
+        )
+        card = inspect_function(path, "build")
+        claim = next(claim for claim in card["claims"] if claim["kind"] == "return_dependency")
+        lines = {span["start_line"] for span in claim["source_spans"]}
+        self.assertIn(2, lines)
+        self.assertIn(3, lines)
+        self.assertIn("seed", claim["statement"]["inputs"])
+
+    def test_strong_reassignment_after_a_weak_write_replaces_it(self):
+        path = self.write(
+            "def build(seed, values):\n"
+            "    out = []\n"
+            "    out.append(seed)\n"
+            "    out = values\n"
+            "    return out\n"
+        )
+        card = inspect_function(path, "build")
+        claim = next(claim for claim in card["claims"] if claim["kind"] == "return_dependency")
+        lines = {span["start_line"] for span in claim["source_spans"]}
+        self.assertIn(4, lines)
+        self.assertNotIn(2, lines)
+        self.assertNotIn(3, lines)
+        self.assertNotIn("seed", claim["statement"]["inputs"])
+
+    def test_unresolvable_write_target_is_a_boundary_on_the_return_claim(self):
+        path = self.write(
+            "def build(seed):\n"
+            "    get_container()[0] = seed\n"
+            "    return seed\n"
+        )
+        card = inspect_function(path, "build")
+        boundary = next(
+            boundary for boundary in card["boundaries"]
+            if boundary["kind"] == "unsupported_semantics" and "cannot determine which name" in boundary["reason"]
+        )
+        claim = next(claim for claim in card["claims"] if claim["kind"] == "return_dependency")
+        self.assertIn(boundary["id"], claim["boundary_ids"])
+
+    def test_match_case_mutation_reaches_the_return(self):
+        path = self.write(
+            "def build(seed, mode):\n"
+            "    out = []\n"
+            "    match mode:\n"
+            "        case 'add':\n"
+            "            out.append(seed)\n"
+            "        case _:\n"
+            "            pass\n"
+            "    return out\n"
+        )
+        card = inspect_function(path, "build")
+        claim = next(claim for claim in card["claims"] if claim["kind"] == "return_dependency")
+        self.assertIn("seed", claim["statement"]["inputs"])
+        self.assertIn("out", claim["statement"]["weak_definitions"])
+
+    def test_call_inside_nested_uncalled_function_is_not_a_weak_write(self):
+        path = self.write(
+            "def build(seed):\n"
+            "    out = []\n"
+            "    def later():\n"
+            "        out.append(seed)\n"
+            "    return out\n"
+        )
+        card = inspect_function(path, "build")
+        claim = next(claim for claim in card["claims"] if claim["kind"] == "return_dependency")
+        self.assertNotIn("seed", claim["statement"]["inputs"])
+        self.assertNotIn("out", claim["statement"].get("weak_definitions", []))
+
+    def test_unresolved_write_nested_in_a_coarse_node_is_still_a_boundary(self):
+        path = self.write(
+            "def get_container():\n"
+            "    return []\n\n"
+            "def build(seed):\n"
+            "    try:\n"
+            "        get_container()[0] = seed\n"
+            "    finally:\n"
+            "        pass\n"
+            "    return seed\n"
+        )
+        card = inspect_function(path, "build")
+        boundary = next(
+            boundary for boundary in card["boundaries"]
+            if boundary["kind"] == "unsupported_semantics" and "cannot determine which name" in boundary["reason"]
+        )
+        claim = next(claim for claim in card["claims"] if claim["kind"] == "return_dependency")
+        self.assertIn(boundary["id"], claim["boundary_ids"])
+
+    def test_trystar_gets_its_own_unsupported_semantics_diagnostic(self):
+        path = self.write(
+            "def build(seed):\n"
+            "    try:\n"
+            "        out = seed\n"
+            "    except* ValueError:\n"
+            "        out = 0\n"
+            "    return out\n"
+        )
+        card = inspect_function(path, "build")
+        self.assertTrue(any(
+            diagnostic["kind"] == "unsupported_semantics" and "TryStar" in diagnostic["message"]
+            for diagnostic in card["diagnostics"]
+        ))
+
+    def test_unresolved_write_boundary_only_limits_reachable_returns(self):
+        path = self.write(
+            "def get_container():\n"
+            "    return []\n\n"
+            "def build(seed, early):\n"
+            "    if early:\n"
+            "        return 'x'\n"
+            "    get_container()[0] = seed\n"
+            "    return 'y'\n"
+        )
+        card = inspect_function(path, "build")
+        boundary = next(
+            boundary for boundary in card["boundaries"]
+            if boundary["kind"] == "unsupported_semantics" and "cannot determine which name" in boundary["reason"]
+        )
+        early_return = next(
+            claim for claim in card["claims"]
+            if claim["kind"] == "return_dependency" and claim["statement"]["source_text"] == "'x'"
+        )
+        late_return = next(
+            claim for claim in card["claims"]
+            if claim["kind"] == "return_dependency" and claim["statement"]["source_text"] == "'y'"
+        )
+        self.assertNotIn(boundary["id"], early_return["boundary_ids"])
+        self.assertIn(boundary["id"], late_return["boundary_ids"])
+
 
 if __name__ == "__main__":
     unittest.main()
