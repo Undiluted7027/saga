@@ -312,8 +312,30 @@ class _EffectScanner(ast.NodeVisitor):
     visit_TryStar = visit_Try
 
     def visit_While(self, node: ast.While) -> None:
-        """Report while-loop semantics because only for loops are in the supported subset."""
+        """Inspect every loop region without claiming which regions execute."""
         self.result.diagnostics.append(_diagnostic("unsupported_semantics", "While-loop analysis is outside the Slice 3 model.", _span(self.path, node), "effects"))
+        boundary = _boundary(
+            self.path,
+            node,
+            "unsupported_semantics",
+            "while statement",
+            (
+                "Effects in the loop test, body, and else branch may be conditional or repeated; "
+                "Saga does not determine which regions execute or how often."
+            ),
+            concerns=["effects"],
+        )
+        self._limit_boundary(boundary)
+        self.result.boundaries.append(boundary)
+        self.conditional_boundaries.append(boundary)
+        try:
+            self.visit(node.test)
+            for statement in node.body:
+                self.visit(statement)
+            for statement in node.orelse:
+                self.visit(statement)
+        finally:
+            self.conditional_boundaries.pop()
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         """Do not attribute nested-function effects to the selected target."""
