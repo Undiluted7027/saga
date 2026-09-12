@@ -69,6 +69,26 @@ class InspectFunctionTests(unittest.TestCase):
         self.assertIn("Source syntax: name", terminal_result.stdout)
         self.assertIn("Method: intraprocedural_may_affect", terminal_result.stdout)
 
+    def test_cli_succeeds_with_useful_claims_and_partial_analysis_diagnostics(self):
+        path = self.write(
+            "def billing(records):\n"
+            "    while records:\n"
+            "        return records[0]\n"
+            "    return None\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-m", "saga.cli", "inspect", f"{path}::billing"],
+            capture_output=True,
+            text=True,
+        )
+        card = json.loads(result.stdout)
+        self.assertEqual(result.returncode, 0)
+        self.assertTrue(card["claims"])
+        self.assertTrue(any(
+            item["kind"] == "unsupported_semantics"
+            for item in card["diagnostics"]
+        ))
+
     def test_guard_and_exception_claims_preserve_structure_and_spans(self):
         path = self.write("def charge(amount):\n    if amount <= 0:\n        raise ValueError('amount')\n    return amount\n")
         card = inspect_function(path, "charge")
@@ -148,6 +168,30 @@ class InspectFunctionTests(unittest.TestCase):
         self.assertEqual(len(boundaries), 1)
         self.assertEqual(boundaries[0]["kind"], "unresolved_call")
         self.assertEqual(boundaries[0]["category"], "routine")
+
+    def test_routine_builtins_stay_boundaries_in_guards_and_returns(self):
+        path = self.write(
+            "def price(items, amount, gateway):\n"
+            "    if len(items) == 0:\n"
+            "        raise ValueError('items')\n"
+            "    rounded = round(abs(amount), 2)\n"
+            "    gateway.authorize(rounded)\n"
+            "    return rounded\n"
+        )
+        card = inspect_function(path, "price")
+        calls = [
+            boundary for boundary in card["boundaries"]
+            if boundary["kind"] == "unresolved_call"
+        ]
+        by_target = {}
+        for boundary in calls:
+            by_target.setdefault(boundary["target"]["text"], set()).add(
+                boundary.get("category", "important")
+            )
+        self.assertEqual(by_target["len(items)"], {"routine"})
+        self.assertEqual(by_target["round(...)"], {"routine"})
+        self.assertEqual(by_target["abs(...)"], {"routine"})
+        self.assertEqual(by_target["gateway.authorize(...)"], {"important"})
 
     def test_registry_resolves_pathlib_aliases_without_unresolved_boundaries(self):
         path = self.write("import pathlib as pl\nfrom pathlib import Path as FilePath\n\ndef write_one(path):\n    pl.Path(path).write_text('one')\n    FilePath(path).write_text('two')\n    return path\n")

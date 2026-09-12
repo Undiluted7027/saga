@@ -3,7 +3,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from saga.diagnostics import deduplicate_diagnostics, group_diagnostics
+from saga.diagnostics import (
+    BLOCKING_DIAGNOSTIC_KINDS,
+    card_exit_code,
+    deduplicate_diagnostics,
+    group_diagnostics,
+)
 from saga.inspect import inspect_function
 from saga.render import terminal
 
@@ -62,6 +67,31 @@ class DiagnosticGroupingTests(unittest.TestCase):
             {"kind": "instrumentation", "message": "Try is unsupported.", "source_span": span(4)},
         ]))
         self.assertEqual(len(groups), 3)
+
+    def test_only_failures_that_prevent_a_usable_card_exit_nonzero(self):
+        partial = card([
+            {"kind": "unsupported_semantics", "message": "Part of the function was not modeled."},
+        ])
+        self.assertEqual(card_exit_code(partial), 0)
+
+        expected = {
+            "missing_file",
+            "invalid_file",
+            "file_error",
+            "parsing",
+            "unsupported_target",
+            "target_not_found",
+            "ambiguous_target",
+            "test_run",
+            "instrumentation",
+        }
+        self.assertEqual(BLOCKING_DIAGNOSTIC_KINDS, expected)
+        for kind in expected:
+            with self.subTest(kind=kind):
+                self.assertEqual(
+                    card_exit_code(card([{"kind": kind, "message": "blocked"}])),
+                    1,
+                )
 
     def test_producer_deduplication_uses_kind_message_and_exact_span(self):
         repeated = {"kind": "unsupported_semantics", "message": "Continue is unsupported.", "analyses": ["returns"], "source_span": span(8)}

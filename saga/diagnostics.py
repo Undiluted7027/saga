@@ -5,6 +5,27 @@ from __future__ import annotations
 from typing import Any
 
 
+BLOCKING_DIAGNOSTIC_KINDS = frozenset({
+    "ambiguous_target",
+    "file_error",
+    "instrumentation",
+    "invalid_file",
+    "missing_file",
+    "parsing",
+    "target_not_found",
+    "test_run",
+    "unsupported_target",
+})
+
+
+def card_exit_code(card: dict[str, Any]) -> int:
+    """Return failure only when a diagnostic prevents a usable result."""
+    return int(any(
+        diagnostic["kind"] in BLOCKING_DIAGNOSTIC_KINDS
+        for diagnostic in card.get("diagnostics", [])
+    ))
+
+
 def _span_key(span: dict[str, Any] | None) -> tuple[Any, ...] | None:
     """Build a stable identity for an optional source span."""
     if span is None:

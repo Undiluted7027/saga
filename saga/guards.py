@@ -6,6 +6,7 @@ import ast
 from dataclasses import dataclass, field
 from typing import Any
 
+from .boundaries import call_category
 from .inspect import Span, _diagnostic, _span
 from .presentation import describe_condition, source_expression
 
@@ -29,13 +30,21 @@ class ExpressionResult:
     unsupported: bool = False
 
 
-def _boundary(path: str, node: ast.AST, kind: str, target: str, reason: str) -> dict[str, Any]:
+def _boundary(
+    path: str,
+    node: ast.AST,
+    kind: str,
+    target: str,
+    reason: str,
+    category: str = "important",
+) -> dict[str, Any]:
     """Build a boundary for dynamic behavior encountered in a guard expression."""
     return {
         "id": f"guard-boundary-{node.lineno}-{node.col_offset}-{kind}",
         "kind": kind,
         "target": {"text": target},
         "reason": reason,
+        "category": category,
         "source_span": _span(path, node).as_dict(),
     }
 
@@ -88,7 +97,7 @@ def _expression(path: str, node: ast.AST, parameters: set[str]) -> ExpressionRes
             arguments.append(child.expression)
             result.assumptions.extend(child.assumptions)
             result.boundaries.extend(child.boundaries)
-        result.boundaries.append(_boundary(path, node, "unresolved_call", ast.unparse(node), "The call may return any value or raise an exception."))
+        result.boundaries.append(_boundary(path, node, "unresolved_call", ast.unparse(node), "The call may return any value or raise an exception.", call_category(node)))
         return result
     if isinstance(node, ast.BoolOp):
         values: list[dict[str, Any]] = []

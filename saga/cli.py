@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 
+from .diagnostics import card_exit_code
 from .inspect import inspect_function
 from .render import terminal
 from .testing import run_tests
@@ -77,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "inspect":
         file_path, qualified_name = args.selector.split("::")
         card = inspect_function(file_path, qualified_name)
-        exit_code = 1 if card["diagnostics"] else 0
+        exit_code = card_exit_code(card)
     else:
         card, exit_code = run_tests(args.selector, pytest_args, args.trace_output)
     card = focus_card(card, args.view)

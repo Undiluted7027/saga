@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 from typing import Any
 
 LOCAL_KINDS = {
@@ -11,6 +12,21 @@ LOCAL_KINDS = {
 }
 DYNAMIC_KINDS = {"dynamic_dispatch", "assignment_hooks"}
 EXCEPTION_KINDS = {"exception_dispatch", "exception_matching"}
+ROUTINE_BUILTINS = {
+    "abs", "all", "any", "bool", "dict", "enumerate", "float", "int",
+    "isinstance", "len", "list", "max", "min", "range", "round", "set",
+    "sorted", "str", "sum", "tuple", "zip",
+}
+ROUTINE_METHODS = {"get", "items", "keys", "values"}
+
+
+def call_category(node: ast.Call) -> str:
+    """Classify familiar unresolved routines without claiming their semantics."""
+    if isinstance(node.func, ast.Name) and node.func.id in ROUTINE_BUILTINS:
+        return "routine"
+    if isinstance(node.func, ast.Attribute) and node.func.attr in ROUTINE_METHODS:
+        return "routine"
+    return "important"
 
 
 def boundary_class(boundary: dict[str, Any]) -> str:

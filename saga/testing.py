@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from .diagnostics import card_exit_code
 from .inspect import inspect_function
 from .observations import evaluate_observations
 from .trace import TRACE_SCHEMA_VERSION
@@ -26,8 +27,8 @@ def run_tests(selector: str, pytest_args: list[str], trace_output: str = ".saga/
     """Run pytest for one supported target and return its combined evidence card."""
     file_path, qualified_name = _selector(selector)
     card = inspect_function(file_path, qualified_name)
-    if card["target"]["status"] != "supported":
-        return card, 1
+    if card_exit_code(card):
+        return card, card_exit_code(card)
     destination = Path(trace_output)
     if not destination.is_absolute():
         destination = Path(cwd or os.getcwd()) / destination
@@ -61,4 +62,4 @@ def run_tests(selector: str, pytest_args: list[str], trace_output: str = ".saga/
     observations = evaluate_observations(card, trace)
     card["claims"].extend(observations.claims)
     card["observation_status"] = observations.status
-    return card, process.returncode
+    return card, process.returncode or card_exit_code(card)

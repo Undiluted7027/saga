@@ -6,6 +6,7 @@ import ast
 from dataclasses import dataclass
 from typing import Any
 
+from .boundaries import call_category
 from .guards import BUILTIN_EXCEPTIONS
 from .inspect import _diagnostic, _span
 from .presentation import source_expression
@@ -17,8 +18,6 @@ EFFECT_REGISTRY: dict[str, dict[str, str]] = {
     },
 }
 PATH_CONSTRUCTORS = {"pathlib.Path"}
-ROUTINE_BUILTINS = {"all", "any", "bool", "dict", "enumerate", "float", "int", "isinstance", "len", "list", "max", "min", "range", "set", "sorted", "str", "sum", "tuple", "zip"}
-ROUTINE_METHODS = {"get", "items", "keys", "values"}
 
 
 @dataclass
@@ -64,15 +63,6 @@ def _boundary(
     if concerns:
         boundary["concerns"] = concerns
     return boundary
-
-
-def _call_category(node: ast.Call) -> str:
-    """Classify common unresolved routines as low-signal without calling them safe."""
-    if isinstance(node.func, ast.Name) and node.func.id in ROUTINE_BUILTINS:
-        return "routine"
-    if isinstance(node.func, ast.Attribute) and node.func.attr in ROUTINE_METHODS:
-        return "routine"
-    return "important"
 
 
 def _root_name(node: ast.AST) -> str | None:
@@ -170,7 +160,7 @@ class _EffectScanner(ast.NodeVisitor):
 
     def _effect_relevant(self, node: ast.Call) -> bool:
         """Identify unresolved calls that can hide the answer to an effects question."""
-        if _call_category(node) == "routine":
+        if call_category(node) == "routine":
             return False
         if id(node) in self.effect_position_calls:
             return True
@@ -267,7 +257,7 @@ class _EffectScanner(ast.NodeVisitor):
                 "unresolved_call",
                 ast.unparse(node.func) + "(...)",
                 reason,
-                _call_category(node),
+                call_category(node),
                 ["effects"] if effect_relevant else None,
             )
             self._limit_boundary(boundary)
