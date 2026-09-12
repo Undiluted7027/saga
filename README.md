@@ -42,6 +42,9 @@ Add `--view return`, `--view mutation`, `--view failure`, or
 `--view boundary` when one question matters more than the whole card. These are
 fixed filters over the same evidence: claim IDs, source spans, details, and
 limiting boundaries do not change. Omit `--view` to return to the full card.
+Focused views keep evidence from module-local callees collapsed beneath each
+call site. Use `--show-local-call-evidence` to expand it in the terminal; the
+editor exposes the same detail through expandable local-call groups.
 
 To add test-observed evidence, install/use the optional test extra and run the
 tests through Saga:

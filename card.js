@@ -113,6 +113,60 @@ function focusCard(card, view = 'full') {
   return focused;
 }
 
+function localCallEvidence(card) {
+  /** Separate direct evidence from evidence grouped beneath its first local call. */
+  const direct = { claims: [], boundaries: [], diagnostics: [] };
+  const groups = [];
+  const byKey = new Map();
+  const spanKey = (span) => [
+    span.path,
+    span.start_line,
+    span.start_column,
+    span.end_line,
+    span.end_column
+  ];
+  for (const collection of ['claims', 'boundaries', 'diagnostics']) {
+    for (const item of card[collection] || []) {
+      const chain = item.call_chain || [];
+      if (!chain.length) {
+        direct[collection].push(item);
+        continue;
+      }
+      const link = chain[0];
+      const invokedAs = link.invoked_as || link.callee;
+      const key = JSON.stringify([
+        link.caller,
+        link.callee,
+        invokedAs,
+        ...spanKey(link.call_site)
+      ]);
+      let group = byKey.get(key);
+      if (!group) {
+        group = {
+          caller: link.caller,
+          callee: link.callee,
+          invokedAs,
+          callSite: link.call_site,
+          calleeSpan: link.callee_span,
+          argumentBindings: link.argument_bindings || [],
+          claims: [],
+          boundaries: [],
+          diagnostics: []
+        };
+        byKey.set(key, group);
+        groups.push(group);
+      }
+      group[collection].push(item);
+    }
+  }
+  groups.sort((left, right) => {
+    const leftKey = [...spanKey(left.callSite), left.caller, left.callee];
+    const rightKey = [...spanKey(right.callSite), right.caller, right.callee];
+    return JSON.stringify(leftKey).localeCompare(JSON.stringify(rightKey), undefined, { numeric: true });
+  });
+  return { direct, groups };
+}
+
 function viewPresentation(card) {
   /** Describe the active view and its honest empty state. */
   const view = card.view || 'full';
@@ -263,4 +317,4 @@ function hoverLines(card) {
   return lines;
 }
 
-module.exports = { loadCard, targetNameFromLine, validateCard, claimPresentation, focusCard, viewPresentation, observationPresentation, boundaryGroups, diagnosticGroups, hoverLines };
+module.exports = { loadCard, targetNameFromLine, validateCard, claimPresentation, focusCard, localCallEvidence, viewPresentation, observationPresentation, boundaryGroups, diagnosticGroups, hoverLines };

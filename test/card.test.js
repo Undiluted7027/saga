@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { loadCard, targetNameFromLine, validateCard, claimPresentation, focusCard, viewPresentation, observationPresentation, boundaryGroups, diagnosticGroups, hoverLines } = require('../card');
+const { loadCard, targetNameFromLine, validateCard, claimPresentation, focusCard, localCallEvidence, viewPresentation, observationPresentation, boundaryGroups, diagnosticGroups, hoverLines } = require('../card');
 
 test('fixture validates against the evidence-card contract', () => {
   const card = loadCard();
@@ -231,6 +231,43 @@ test('focused editor views filter diagnostics and point back to the full card', 
   assert.equal(mutation.hidden_diagnostics.group_count, 1);
   assert.equal(viewPresentation(mutation).hiddenDiagnosticMessage, '1 diagnostic group hidden; open the full card to inspect them.');
   assert.equal(focusCard(card, 'full'), card);
+});
+
+test('editor partitions propagated evidence by first local call site', () => {
+  const sourceSpan = (line) => ({ path: 'module.py', start_line: line, start_column: 4, end_line: line, end_column: 12 });
+  const callLink = (callee, line) => ({
+    caller: 'target',
+    callee,
+    invoked_as: callee,
+    via_alias: false,
+    call_site: sourceSpan(line),
+    callee_span: sourceSpan(line + 100),
+    argument_bindings: []
+  });
+  const first = callLink('helper', 5);
+  const second = callLink('helper', 9);
+  const directClaim = { id: 'direct' };
+  const propagatedClaim = { id: 'propagated', call_chain: [first] };
+  const secondClaim = { id: 'second-call', call_chain: [second] };
+  const propagatedBoundary = { id: 'boundary', call_chain: [first] };
+  const propagatedDiagnostic = { message: 'Gap', call_chain: [first] };
+  const card = {
+    claims: [directClaim, propagatedClaim, secondClaim],
+    boundaries: [propagatedBoundary],
+    diagnostics: [propagatedDiagnostic]
+  };
+  const before = structuredClone(card);
+
+  const partition = localCallEvidence(card);
+
+  assert.deepEqual(partition.direct.claims, [directClaim]);
+  assert.equal(partition.groups.length, 2);
+  assert.equal(partition.groups[0].callSite.start_line, 5);
+  assert.deepEqual(partition.groups[0].claims, [propagatedClaim]);
+  assert.deepEqual(partition.groups[0].boundaries, [propagatedBoundary]);
+  assert.deepEqual(partition.groups[0].diagnostics, [propagatedDiagnostic]);
+  assert.equal(partition.groups[1].callSite.start_line, 9);
+  assert.deepEqual(card, before);
 });
 
 test('extension contributes all four focused view actions', () => {

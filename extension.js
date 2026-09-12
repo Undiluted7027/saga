@@ -2,7 +2,7 @@ const vscode = require('vscode');
 const cp = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-const { targetNameFromLine, validateCard, claimPresentation, focusCard, viewPresentation, observationPresentation, boundaryGroups, diagnosticGroups, hoverLines } = require('./card');
+const { targetNameFromLine, validateCard, claimPresentation, focusCard, localCallEvidence, viewPresentation, observationPresentation, boundaryGroups, diagnosticGroups, hoverLines } = require('./card');
 
 const staticCardCache = new Map();
 
@@ -78,6 +78,7 @@ function panelHtml(card, panel) {
   /** Render the shared structured result as a navigable webview document. */
   const esc = (value) => String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const view = viewPresentation(card);
+  const partition = view.name === 'full' ? undefined : localCallEvidence(card);
   const renderCallChain = (chain) => chain?.length ? `<details><summary>Local call chain</summary><ol>${chain.map((link) => { const bindings = link.argument_bindings.length ? ` (${link.argument_bindings.map((item) => `${item.parameter} = ${item.argument}`).join(', ')})` : ''; return `<li>${esc(link.caller)} → ${esc(link.callee)}${esc(bindings)} · <a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(link.call_site))}">call</a> · <a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(link.callee_span))}">callee</a></li>`; }).join('')}</ol></details>` : '';
   const renderClaims = (claims) => claims.map((claim) => {
     const view = claimPresentation(claim);
@@ -107,19 +108,23 @@ function panelHtml(card, panel) {
     const locations = group.count === 1 ? `<ol>${sites}</ol>` : `<details><summary>${group.count} source locations</summary><ol>${sites}</ol></details>`;
     return `<article class="boundary"><h3>${esc(group.boundaryClass.replaceAll('_', ' '))} <em>${esc(group.kind.replaceAll('_', ' '))}</em></h3><p><strong>${esc(group.target)}</strong> · ${group.count} ${siteLabel}</p><p>${esc(group.reason)}</p>${limitedClaims}${limitedBy}${locations}</article>`;
   };
-  const groups = boundaryGroups(card);
-  const importantBoundaries = groups.filter((group) => group.category !== 'routine');
-  const routineBoundaries = groups.filter((group) => group.category === 'routine');
-  const routineSites = routineBoundaries.reduce((total, group) => total + group.count, 0);
-  const routineGroupLabel = routineBoundaries.length === 1 ? 'group' : 'groups';
-  const routineSummary = routineBoundaries.length ? `<details><summary>${routineSites} routine unresolved call sites in ${routineBoundaries.length} ${routineGroupLabel}</summary>${routineBoundaries.map(renderBoundaryGroup).join('')}</details>` : '';
-  const boundaries = importantBoundaries.map(renderBoundaryGroup).join('') + routineSummary;
-  const diagnostics = diagnosticGroups(card).map((group) => {
+  const renderBoundaries = (boundaries) => {
+    const groups = boundaryGroups({ ...card, boundaries });
+    const important = groups.filter((group) => group.category !== 'routine');
+    const routine = groups.filter((group) => group.category === 'routine');
+    const routineSites = routine.reduce((total, group) => total + group.count, 0);
+    const routineGroupLabel = routine.length === 1 ? 'group' : 'groups';
+    const routineSummary = routine.length ? `<details><summary>${routineSites} routine unresolved call sites in ${routine.length} ${routineGroupLabel}</summary>${routine.map(renderBoundaryGroup).join('')}</details>` : '';
+    return important.map(renderBoundaryGroup).join('') + routineSummary;
+  };
+  const renderDiagnostics = (diagnostics) => diagnosticGroups({ diagnostics }).map((group) => {
     const sites = group.occurrences.map((occurrence) => { const source = occurrence.sourceSpan ? `<a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(occurrence.sourceSpan))}">${esc(`${occurrence.sourceSpan.path}:${occurrence.sourceSpan.start_line}`)}</a>` : 'No source location'; return `<li>${source}${renderCallChain(occurrence.callChain)}</li>`; }).join('');
     const count = `${group.reportCount} report${group.reportCount === 1 ? '' : 's'} at ${group.siteCount} source site${group.siteCount === 1 ? '' : 's'}`;
     const locations = group.reportCount > 1 ? `<details><summary>${esc(count)}</summary><ol>${sites}</ol></details>` : `<ol>${sites}</ol>`;
     return `<article class="diagnostic"><h3>${esc(group.kind)} <em>${esc(group.analyses.join(', '))}</em></h3><p>${esc(group.message)}</p>${locations}</article>`;
   }).join('');
+  const boundaries = renderBoundaries(card.boundaries);
+  const diagnostics = renderDiagnostics(card.diagnostics);
   const observationStatus = card.observation_status;
   const observationView = observationPresentation(observationStatus);
   const excludedParameters = observationView?.excludedParameters.length
@@ -135,13 +140,31 @@ function panelHtml(card, panel) {
   const navigation = `<nav><a href="command:saga.openEvidenceCard?${request('full')}">Full card</a> · <a href="command:saga.openEvidenceCard?${request('return')}">Return</a> · <a href="command:saga.openEvidenceCard?${request('mutation')}">Mutation</a> · <a href="command:saga.openEvidenceCard?${request('failure')}">Failure</a> · <a href="command:saga.openEvidenceCard?${request('boundary')}">Boundaries</a></nav>`;
   const empty = view.empty ? `<p class="empty">${esc(view.emptyMessage)}</p>` : '';
   const fullContent = `<h2>Derived claims</h2>${derivedClaims || '<p>None</p>'}<h2>Observed claims</h2>${observedClaims}${observationSummary}<h2>Boundaries</h2>${boundaries || '<p>None</p>'}<h2>Diagnostics</h2>${diagnostics || '<p>None</p>'}`;
-  const focusedClaims = view.name === 'boundary' ? '' : `<h2>${esc(view.label)}</h2>${empty || renderClaims(card.claims)}`;
-  const focusedBoundaries = `<h2>${view.name === 'boundary' ? 'Analysis boundaries' : 'Related boundaries'}</h2>${view.name === 'boundary' && empty ? empty : boundaries || '<p>None limit this evidence.</p>'}`;
-  const focusedDiagnostics = diagnostics ? `<h2>Target diagnostics</h2>${diagnostics}` : '';
+  const directClaims = partition?.direct.claims || card.claims;
+  const directBoundaries = partition?.direct.boundaries || card.boundaries;
+  const directDiagnostics = partition?.direct.diagnostics || card.diagnostics;
+  const focusedClaims = view.name === 'boundary' ? '' : `<h2>${esc(view.label)}</h2>${empty || renderClaims(directClaims)}`;
+  const focusedBoundaryHtml = renderBoundaries(directBoundaries);
+  const focusedBoundaries = `<h2>${view.name === 'boundary' ? 'Direct analysis boundaries' : 'Directly related boundaries'}</h2>${view.name === 'boundary' && empty ? empty : focusedBoundaryHtml || '<p>None limit this direct evidence.</p>'}`;
+  const focusedDiagnosticHtml = renderDiagnostics(directDiagnostics);
+  const focusedDiagnostics = focusedDiagnosticHtml ? `<h2>Target diagnostics</h2>${focusedDiagnosticHtml}` : '';
+  const localCallGroups = (partition?.groups || []).map((group) => {
+    const groupedBoundaries = boundaryGroups({ ...card, boundaries: group.boundaries });
+    const groupedDiagnostics = diagnosticGroups({ diagnostics: group.diagnostics });
+    const counts = `${group.claims.length} claim${group.claims.length === 1 ? '' : 's'}, ${groupedBoundaries.length} boundary group${groupedBoundaries.length === 1 ? '' : 's'}, ${groupedDiagnostics.length} diagnostic group${groupedDiagnostics.length === 1 ? '' : 's'}`;
+    const callLink = `<a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(group.callSite))}">call at ${esc(`${group.callSite.path}:${group.callSite.start_line}`)}</a>`;
+    const calleeLink = `<a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(group.calleeSpan))}">callee</a>`;
+    const bindings = group.argumentBindings.length ? `<small>Arguments: ${esc(group.argumentBindings.map((item) => `${item.parameter} = ${item.argument}`).join(', '))}</small>` : '';
+    const claims = group.claims.length ? `<h3>Claims</h3>${renderClaims(group.claims)}` : '';
+    const boundaries = group.boundaries.length ? `<h3>Boundaries</h3>${renderBoundaries(group.boundaries)}` : '';
+    const diagnostics = group.diagnostics.length ? `<h3>Diagnostics</h3>${renderDiagnostics(group.diagnostics)}` : '';
+    return `<details class="local-call-evidence"><summary><strong>${esc(group.invokedAs)}(...)</strong> · ${esc(counts)}</summary><p>${callLink} · ${calleeLink}</p>${bindings}${claims}${boundaries}${diagnostics}</details>`;
+  }).join('');
+  const propagatedEvidence = localCallGroups ? `<h2>Evidence inside local calls</h2>${localCallGroups}` : '';
   const hiddenDiagnostics = view.hiddenDiagnosticMessage ? `<p class="diagnostic-pointer">${esc(view.hiddenDiagnosticMessage)}</p>` : '';
   const focusedObservationStatus = observationStatus ? `<h2>Test observation status</h2>${observationSummary}` : '';
-  const content = view.name === 'full' ? fullContent : focusedClaims + focusedBoundaries + focusedObservationStatus + focusedDiagnostics + hiddenDiagnostics;
-  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${panel.webview.cspSource};"><style>body{font-family:var(--vscode-font-family);padding:0 2em;line-height:1.45}h1{font-size:1.35em}h3{margin-bottom:.25em;text-transform:capitalize}nav{margin:.8em 0}.empty{border-left:3px solid var(--vscode-editorWarning-foreground);padding:.6em 1em}article{border-top:1px solid var(--vscode-panel-border);padding:.7em 0}em{font-size:.75em;font-weight:normal;background:var(--vscode-textBlockQuote-background);padding:.15em .4em}.boundary{border-left:3px solid var(--vscode-editorWarning-foreground);padding-left:1em}.diagnostic{border-left:3px solid var(--vscode-editorError-foreground);padding-left:1em}.observation-status{border-left:3px solid var(--vscode-editorInfo-foreground);padding-left:1em}small{display:block;color:var(--vscode-descriptionForeground)}pre{white-space:pre-wrap}</style></head><body><h1>${esc(card.target.name)} · ${esc(view.label)}</h1><p><code>${esc(card.target.signature)}</code></p>${navigation}<p><a href="command:saga.runTests?${request(view.name)}">Run tests for this function</a></p>${content}</body></html>`;
+  const content = view.name === 'full' ? fullContent : focusedClaims + focusedBoundaries + focusedObservationStatus + focusedDiagnostics + propagatedEvidence + hiddenDiagnostics;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${panel.webview.cspSource};"><style>body{font-family:var(--vscode-font-family);padding:0 2em;line-height:1.45}h1{font-size:1.35em}h3{margin-bottom:.25em;text-transform:capitalize}nav{margin:.8em 0}.empty{border-left:3px solid var(--vscode-editorWarning-foreground);padding:.6em 1em}article{border-top:1px solid var(--vscode-panel-border);padding:.7em 0}em{font-size:.75em;font-weight:normal;background:var(--vscode-textBlockQuote-background);padding:.15em .4em}.boundary{border-left:3px solid var(--vscode-editorWarning-foreground);padding-left:1em}.diagnostic{border-left:3px solid var(--vscode-editorError-foreground);padding-left:1em}.observation-status{border-left:3px solid var(--vscode-editorInfo-foreground);padding-left:1em}.local-call-evidence{border-left:3px solid var(--vscode-editorInfo-foreground);margin:.7em 0;padding:.5em 1em}small{display:block;color:var(--vscode-descriptionForeground)}pre{white-space:pre-wrap}</style></head><body><h1>${esc(card.target.name)} · ${esc(view.label)}</h1><p><code>${esc(card.target.signature)}</code></p>${navigation}<p><a href="command:saga.runTests?${request(view.name)}">Run tests for this function</a></p>${content}</body></html>`;
 }
 
 const evidencePanels = new Map();
@@ -260,4 +283,4 @@ function activate(context) {
   );
 }
 
-module.exports = { activate, deactivate: () => { } };
+module.exports = { activate, deactivate: () => { }, panelHtml };
