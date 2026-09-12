@@ -211,6 +211,77 @@ class InspectFunctionTests(unittest.TestCase):
         self.assertTrue(any(boundary["kind"] == "unresolved_call" and boundary["source_span"]["start_line"] == 4 for boundary in card["boundaries"]))
         self.assertTrue(any(boundary["source_span"]["start_line"] == 4 and boundary["id"] in claim["boundary_ids"] for boundary in card["boundaries"]))
 
+    def test_callable_parameter_boundary_attaches_through_returned_argument(self):
+        path = self.write(
+            "def build(out, callback):\n"
+            "    callback(out)\n"
+            "    return out\n"
+        )
+        card = inspect_function(path, "build")
+        claim = next(claim for claim in card["claims"] if claim["kind"] == "return_dependency")
+        boundary = next(
+            boundary for boundary in card["boundaries"]
+            if boundary["kind"] == "unresolved_call" and boundary["source_span"]["start_line"] == 2
+        )
+        self.assertIn(boundary["id"], claim["boundary_ids"])
+        self.assertEqual(boundary["target"]["text"], "callback(...)")
+        self.assertIn("cannot determine", boundary["reason"])
+
+    def test_unknown_method_boundary_attaches_through_returned_receiver(self):
+        path = self.write(
+            "def refresh(out):\n"
+            "    out.refresh()\n"
+            "    return out\n"
+        )
+        card = inspect_function(path, "refresh")
+        claim = next(claim for claim in card["claims"] if claim["kind"] == "return_dependency")
+        boundary = next(boundary for boundary in card["boundaries"] if boundary["kind"] == "unresolved_call")
+        self.assertIn(boundary["id"], claim["boundary_ids"])
+
+    def test_unrelated_opaque_call_does_not_limit_return(self):
+        path = self.write(
+            "def build(out, values):\n"
+            "    inspect_unknown(values)\n"
+            "    return out\n"
+        )
+        card = inspect_function(path, "build")
+        claim = next(claim for claim in card["claims"] if claim["kind"] == "return_dependency")
+        boundary = next(boundary for boundary in card["boundaries"] if boundary["kind"] == "unresolved_call")
+        self.assertNotIn(boundary["id"], claim["boundary_ids"])
+
+    def test_opaque_calls_attach_by_slice_names_inside_and_outside_loops(self):
+        path = self.write(
+            "def build(out, values, other):\n"
+            "    before(out)\n"
+            "    for value in values:\n"
+            "        unrelated(other)\n"
+            "        inside(out, value)\n"
+            "        out.append(value)\n"
+            "    return out\n"
+        )
+        card = inspect_function(path, "build")
+        claim = next(claim for claim in card["claims"] if claim["kind"] == "return_dependency")
+        boundaries = {
+            boundary["source_span"]["start_line"]: boundary
+            for boundary in card["boundaries"]
+            if boundary["kind"] == "unresolved_call"
+        }
+        self.assertIn(boundaries[2]["id"], claim["boundary_ids"])
+        self.assertNotIn(boundaries[4]["id"], claim["boundary_ids"])
+        self.assertIn(boundaries[5]["id"], claim["boundary_ids"])
+        self.assertIn(boundaries[6]["id"], claim["boundary_ids"])
+
+    def test_zero_argument_call_used_as_return_value_keeps_its_boundary(self):
+        path = self.write(
+            "def build():\n"
+            "    result = opaque()\n"
+            "    return result\n"
+        )
+        card = inspect_function(path, "build")
+        claim = next(claim for claim in card["claims"] if claim["kind"] == "return_dependency")
+        boundary = next(boundary for boundary in card["boundaries"] if boundary["kind"] == "unresolved_call")
+        self.assertIn(boundary["id"], claim["boundary_ids"])
+
     def test_raising_a_modeled_builtin_exception_is_not_an_unresolved_call(self):
         path = self.write("def fail(order):\n    order.status = 'failed'\n    raise RuntimeError('stop')\n")
         card = inspect_function(path, "fail")

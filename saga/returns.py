@@ -392,6 +392,77 @@ def _call_details(path: str, node: ast.AST) -> list[dict[str, Any]]:
     return calls
 
 
+def _call_dependency_names(call: ast.Call) -> set[str]:
+    """Return receiver and argument names an opaque call could affect.
+
+    The callee name itself is deliberately excluded. Without call semantics,
+    Saga can only connect the boundary to a return through values supplied to
+    the call or through the receiver of an attribute call.
+    """
+    names: set[str] = set()
+    if isinstance(call.func, ast.Attribute):
+        receiver = _write_root(call.func.value)
+        if receiver is not None:
+            names.add(receiver)
+    for argument in call.args:
+        names.update(_read_names(argument))
+    for keyword in call.keywords:
+        names.update(_read_names(keyword.value))
+    return names
+
+
+def _opaque_call_boundary_ids(
+    path: str,
+    return_node: CFGNode,
+    included: set[int],
+    builder: _CFGBuilder,
+    boundaries: list[dict[str, Any]],
+) -> set[str]:
+    """Find unresolved calls that may affect the selected return slice."""
+    slice_names: set[str] = set()
+    for node_id in included:
+        node = builder.nodes[node_id]
+        slice_names.update(node.reads)
+        slice_names.update(node.definitions)
+        slice_names.update(node.weak_definitions)
+    if not slice_names:
+        return set()
+
+    unresolved_by_span: dict[tuple[tuple[str, Any], ...], list[str]] = {}
+    for boundary in boundaries:
+        if boundary["kind"] != "unresolved_call":
+            continue
+        key = tuple(sorted(boundary["source_span"].items()))
+        unresolved_by_span.setdefault(key, []).append(boundary["id"])
+
+    relevant: set[str] = set()
+    reachable = builder.ancestors(return_node.node_id) | {return_node.node_id}
+    calls: dict[tuple[tuple[str, Any], ...], tuple[ast.Call, set[int]]] = {}
+    for node_id in reachable:
+        for item in _walk_current_scope(builder.nodes[node_id].statement):
+            if isinstance(item, ast.Call):
+                key = tuple(sorted(_span(path, item).as_dict().items()))
+                call, owners = calls.setdefault(key, (item, set()))
+                owners.add(node_id)
+    for key, (call, owners) in calls.items():
+        if key not in unresolved_by_span:
+            continue
+        # Nested statements also lie inside their coarse parent span. The node
+        # with the latest source start is the narrowest CFG owner of the call.
+        owner = max(
+            owners,
+            key=lambda node_id: (
+                builder.nodes[node_id].statement.lineno,
+                builder.nodes[node_id].statement.col_offset,
+            ),
+        )
+        result_is_in_slice = owner in included
+        shares_slice_value = bool(_call_dependency_names(call) & slice_names)
+        if result_is_in_slice or shares_slice_value:
+            relevant.update(unresolved_by_span[key])
+    return relevant
+
+
 def _claim(path: str, return_node: CFGNode, included: set[int], builder: _CFGBuilder, boundaries: list[dict[str, Any]], parameter_names: set[str]) -> dict[str, Any]:
     """Build one source-linked may-affect claim for a single return statement."""
     ordered = sorted(included, key=lambda item: (builder.nodes[item].statement.lineno, builder.nodes[item].statement.col_offset))
@@ -425,6 +496,10 @@ def _claim(path: str, return_node: CFGNode, included: set[int], builder: _CFGBui
         dependencies.append({"kind": kind, "names": names, "reads": sorted(node.reads), "calls": _call_details(path, node.statement), "source_span": span})
     boundary_ids = []
     for boundary in boundaries:
+        if boundary["kind"] == "unresolved_call":
+            # Opaque calls are attached below using exact AST ownership and
+            # slice-name overlap. A coarse statement span alone is not enough.
+            continue
         if any(_contains(span, boundary["source_span"]) for span in source_spans):
             boundary_ids.append(boundary["id"])
     inputs = sorted(reads & parameter_names)
@@ -536,6 +611,9 @@ def analyze_returns(path: str, node: ast.FunctionDef, boundaries: list[dict[str,
                         included.add(definition)
                         worklist.append(definition)
         claim = _claim(path, return_node, included, builder, boundaries, parameter_names)
+        opaque_call_ids = _opaque_call_boundary_ids(path, return_node, included, builder, boundaries)
+        if opaque_call_ids:
+            claim["boundary_ids"] = sorted({*claim["boundary_ids"], *opaque_call_ids})
         if builder.write_boundaries:
             reachable = builder.ancestors(return_node.node_id)
             relevant_ids = {
