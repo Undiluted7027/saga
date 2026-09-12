@@ -127,6 +127,7 @@ function boundaryGroups(card) {
         category: boundary.category || 'important',
         boundaryClass: boundaryClass(boundary),
         boundaryIds: [],
+        limitingBoundaryIds: [],
         claimKinds: [],
         occurrences: []
       };
@@ -138,6 +139,10 @@ function boundaryGroups(card) {
       group.boundaryClass = boundaryClass({ ...boundary, category: 'important' });
     }
     group.boundaryIds.push(boundary.id);
+    group.limitingBoundaryIds = [...new Set([
+      ...group.limitingBoundaryIds,
+      ...(boundary.boundary_ids || [])
+    ])].sort();
     group.claimKinds = [...new Set([
       ...group.claimKinds,
       ...(claimsByBoundary.get(boundary.id) || [])
@@ -145,7 +150,8 @@ function boundaryGroups(card) {
     group.occurrences.push({
       boundaryId: boundary.id,
       sourceSpan: boundary.source_span,
-      callChain: boundary.call_chain || []
+      callChain: boundary.call_chain || [],
+      boundaryIds: boundary.boundary_ids || []
     });
   }
   for (const group of groups) group.count = group.occurrences.length;

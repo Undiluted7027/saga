@@ -52,6 +52,7 @@ def group_boundaries(card: dict[str, Any]) -> list[dict[str, Any]]:
                 "category": boundary.get("category", "important"),
                 "boundary_class": boundary_class(boundary),
                 "boundary_ids": [],
+                "limiting_boundary_ids": [],
                 "claim_kinds": [],
                 "occurrences": [],
             }
@@ -63,6 +64,10 @@ def group_boundaries(card: dict[str, Any]) -> list[dict[str, Any]]:
                 {**boundary, "category": "important"}
             )
         group["boundary_ids"].append(boundary["id"])
+        group["limiting_boundary_ids"] = sorted({
+            *group["limiting_boundary_ids"],
+            *boundary.get("boundary_ids", []),
+        })
         group["claim_kinds"] = sorted(
             {
                 *group["claim_kinds"],
@@ -74,6 +79,7 @@ def group_boundaries(card: dict[str, Any]) -> list[dict[str, Any]]:
                 "boundary_id": boundary["id"],
                 "source_span": boundary["source_span"],
                 "call_chain": boundary.get("call_chain", []),
+                "boundary_ids": boundary.get("boundary_ids", []),
             }
         )
     for group in groups:

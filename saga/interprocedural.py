@@ -64,6 +64,12 @@ def _deduplicate_boundaries(boundaries: list[dict[str, Any]]) -> list[dict[str, 
             })
             if concerns:
                 retained["concerns"] = concerns
+            boundary_ids = sorted({
+                *retained.get("boundary_ids", []),
+                *boundary.get("boundary_ids", []),
+            })
+            if boundary_ids:
+                retained["boundary_ids"] = boundary_ids
             if (
                 "effects" in boundary.get("concerns", [])
                 and "cannot determine whether this call mutates state"
@@ -132,6 +138,8 @@ def _rewrite_call_boundaries(
             continue
         if key not in replacements:
             replacement = _stopping_boundary(path, caller, resolution)
+            if boundary.get("boundary_ids"):
+                replacement["boundary_ids"] = list(boundary["boundary_ids"])
             if boundary.get("concerns"):
                 replacement["concerns"] = list(boundary["concerns"])
                 if "effects" in boundary["concerns"]:
@@ -158,6 +166,14 @@ def _rewrite_call_boundaries(
                     " Saga cannot determine whether this call mutates state or "
                     "causes an external effect."
                 )
+        if key in replacements and boundary.get("boundary_ids"):
+            replacement = next(
+                item for item in result if item["id"] == replacements[key]
+            )
+            replacement["boundary_ids"] = sorted({
+                *replacement.get("boundary_ids", []),
+                *boundary["boundary_ids"],
+            })
         boundary_ids[boundary["id"]] = replacements[key]
     for resolution in resolutions:
         if resolution.status in {"resolved", "external"}:
@@ -542,6 +558,18 @@ def _unique_spans(spans: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
+def _span_contains(outer: dict[str, Any], inner: dict[str, Any]) -> bool:
+    """Return whether one source span contains another in the same file."""
+    if outer["path"] != inner["path"]:
+        return False
+    return (
+        (outer["start_line"], outer["start_column"])
+        <= (inner["start_line"], inner["start_column"])
+        and (inner["end_line"], inner["end_column"])
+        <= (outer["end_line"], outer["end_column"])
+    )
+
+
 def _propagate_boundary(
     path: str,
     caller: ast.FunctionDef,
@@ -654,7 +682,16 @@ def analyze_one_hop(path: str, tree: ast.Module, node: ast.FunctionDef) -> Funct
                 1,
             )
         callee_evidence = callee_cache[resolution.callee.name]
+        call_span = _span(path, resolution.call).as_dict()
+        caller_condition_ids = [
+            boundary["id"]
+            for boundary in evidence.boundaries
+            if boundary["kind"] == "unsupported_semantics"
+            and "effects" in boundary.get("concerns", [])
+            and _span_contains(boundary["source_span"], call_span)
+        ]
         boundary_map: dict[str, str] = {}
+        propagated_boundaries: list[dict[str, Any]] = []
         for boundary in callee_evidence.boundaries:
             propagated = _propagate_boundary(path, node, resolution, boundary)
             boundary_map[boundary["id"]] = propagated["id"]
@@ -662,6 +699,15 @@ def analyze_one_hop(path: str, tree: ast.Module, node: ast.FunctionDef) -> Funct
             if key not in propagated_keys:
                 propagated_keys.add(key)
                 evidence.boundaries.append(propagated)
+                propagated_boundaries.append(propagated)
+        for propagated in propagated_boundaries:
+            propagated["boundary_ids"] = sorted({
+                *caller_condition_ids,
+                *(
+                    boundary_map.get(boundary_id, boundary_id)
+                    for boundary_id in propagated.get("boundary_ids", [])
+                ),
+            })
         binding_boundaries = _compose_return_dependencies(
             path,
             node,
@@ -693,6 +739,11 @@ def analyze_one_hop(path: str, tree: ast.Module, node: ast.FunctionDef) -> Funct
                     boundary_map[boundary["id"]] = propagated_boundary["id"]
                     evidence.boundaries.append(propagated_boundary)
             propagated = _propagate_claim(path, node, resolution, claim, boundary_map)
+            if claim["kind"] in {"attempted_write", "known_effect"}:
+                propagated["boundary_ids"] = sorted({
+                    *propagated["boundary_ids"],
+                    *caller_condition_ids,
+                })
             if handler_spans:
                 propagated["statement"]["handler_spans"] = handler_spans
                 propagated["source_spans"] = _unique_spans([

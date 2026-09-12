@@ -118,6 +118,17 @@ class BoundaryGroupingTests(unittest.TestCase):
         )[0]
         self.assertEqual(group["claim_kinds"], ["known_effect", "return_dependency"])
 
+    def test_group_preserves_boundaries_that_limit_other_boundaries(self):
+        call = boundary("call", 4)
+        call["boundary_ids"] = ["conditional"]
+        group = group_boundaries(card([
+            call,
+            boundary("conditional", 2, target="try statement", kind="unsupported_semantics"),
+        ]))[0]
+        self.assertEqual(group["limiting_boundary_ids"], ["conditional"])
+        self.assertEqual(group["occurrences"][0]["boundary_ids"], ["conditional"])
+        self.assertIn("limited by conditional", terminal(card([call])))
+
     def test_terminal_groups_prominent_sites_and_hides_routine_details_by_default(self):
         raw = card([
             boundary("one", 4),

@@ -95,6 +95,16 @@ test('editor groups repeated boundaries without dropping occurrences', () => {
   assert.deepEqual(card.boundaries, before);
 });
 
+test('editor boundary groups preserve limits on other boundaries', () => {
+  const card = loadCard();
+  const call = structuredClone(card.boundaries.find((item) => item.kind === 'unresolved_call'));
+  call.id = 'conditional-call';
+  call.boundary_ids = ['try-limit'];
+  const groups = boundaryGroups({ ...card, boundaries: [call] });
+  assert.deepEqual(groups[0].limitingBoundaryIds, ['try-limit']);
+  assert.deepEqual(groups[0].occurrences[0].boundaryIds, ['try-limit']);
+});
+
 test('editor groups repeated diagnostics without changing the raw reports', () => {
   const card = loadCard();
   card.diagnostics = [

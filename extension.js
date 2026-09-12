@@ -100,10 +100,11 @@ function panelHtml(card, panel) {
   const renderBoundaryGroup = (group) => {
     const sites = group.occurrences.map((occurrence) => `<li><a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(occurrence.sourceSpan))}">${esc(`${occurrence.sourceSpan.path}:${occurrence.sourceSpan.start_line}`)}</a>${renderCallChain(occurrence.callChain)}</li>`).join('');
     const limitedClaims = group.claimKinds.length ? `<small>Limits: ${esc(group.claimKinds.join(', '))}</small>` : '';
+    const limitedBy = group.limitingBoundaryIds.length ? `<small>Limited by: ${esc(group.limitingBoundaryIds.join(', '))}</small>` : '';
     const isCall = ['routine_call', 'module_local', 'external_or_unresolved_call'].includes(group.boundaryClass);
     const siteLabel = `${isCall ? 'call' : 'source'} site${group.count === 1 ? '' : 's'}`;
     const locations = group.count === 1 ? `<ol>${sites}</ol>` : `<details><summary>${group.count} source locations</summary><ol>${sites}</ol></details>`;
-    return `<article class="boundary"><h3>${esc(group.boundaryClass.replaceAll('_', ' '))} <em>${esc(group.kind.replaceAll('_', ' '))}</em></h3><p><strong>${esc(group.target)}</strong> · ${group.count} ${siteLabel}</p><p>${esc(group.reason)}</p>${limitedClaims}${locations}</article>`;
+    return `<article class="boundary"><h3>${esc(group.boundaryClass.replaceAll('_', ' '))} <em>${esc(group.kind.replaceAll('_', ' '))}</em></h3><p><strong>${esc(group.target)}</strong> · ${group.count} ${siteLabel}</p><p>${esc(group.reason)}</p>${limitedClaims}${limitedBy}${locations}</article>`;
   };
   const groups = boundaryGroups(card);
   const importantBoundaries = groups.filter((group) => group.category !== 'routine');

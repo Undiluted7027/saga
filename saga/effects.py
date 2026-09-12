@@ -144,7 +144,29 @@ class _EffectScanner(ast.NodeVisitor):
         self.globals = globals_
         self.parameters = parameters
         self.effect_position_calls: set[int] = set()
+        self.conditional_boundaries: list[dict[str, Any]] = []
         self.result = EffectResult([], [], [])
+
+    def _conditional_boundary_ids(self) -> list[str]:
+        """Return the active exception-flow limits from outermost to innermost."""
+        return [boundary["id"] for boundary in self.conditional_boundaries]
+
+    def _limit_claim(self, claim: dict[str, Any]) -> None:
+        """Attach active exception-flow limits to an effect claim."""
+        claim["boundary_ids"] = [
+            *claim["boundary_ids"],
+            *(
+                boundary_id
+                for boundary_id in self._conditional_boundary_ids()
+                if boundary_id not in claim["boundary_ids"]
+            ),
+        ]
+
+    def _limit_boundary(self, boundary: dict[str, Any]) -> None:
+        """Attach active exception-flow limits to another boundary record."""
+        boundary_ids = self._conditional_boundary_ids()
+        if boundary_ids:
+            boundary["boundary_ids"] = boundary_ids
 
     def _effect_relevant(self, node: ast.Call) -> bool:
         """Identify unresolved calls that can hide the answer to an effects question."""
@@ -174,8 +196,10 @@ class _EffectScanner(ast.NodeVisitor):
         claim = _claim(self.path, target, {"type": "attempted_write", "target": structured, "source_text": target_text}, f"Attempts to write to {target_text}.")
         if isinstance(target, (ast.Attribute, ast.Subscript)):
             boundary = _boundary(self.path, target, "assignment_hooks", ast.unparse(target), "The assignment may invoke a descriptor, __setattr__, or __setitem__ implementation.")
+            self._limit_boundary(boundary)
             self.result.boundaries.append(boundary)
             claim["boundary_ids"].append(boundary["id"])
+        self._limit_claim(claim)
         self.result.claims.append(claim)
 
     def visit_Assign(self, node: ast.Assign) -> None:
@@ -227,7 +251,9 @@ class _EffectScanner(ast.NodeVisitor):
         modeled_exception = isinstance(node.func, ast.Name) and node.func.id in BUILTIN_EXCEPTIONS
         if canonical in EFFECT_REGISTRY:
             effect = EFFECT_REGISTRY[canonical]
-            self.result.claims.append(_claim(self.path, node, {"type": "known_effect", "effect": {"kind": effect["kind"], "callee": canonical}, "source_text": source_expression(node)}, f"May {effect['description']} through {canonical}(...)."))
+            claim = _claim(self.path, node, {"type": "known_effect", "effect": {"kind": effect["kind"], "callee": canonical}, "source_text": source_expression(node)}, f"May {effect['description']} through {canonical}(...).")
+            self._limit_claim(claim)
+            self.result.claims.append(claim)
         elif not modeled_exception:
             effect_relevant = self._effect_relevant(node)
             reason = (
@@ -244,6 +270,7 @@ class _EffectScanner(ast.NodeVisitor):
                 _call_category(node),
                 ["effects"] if effect_relevant else None,
             )
+            self._limit_boundary(boundary)
             self.result.boundaries.append(boundary)
         for argument in node.args:
             self.visit(argument)
@@ -263,8 +290,36 @@ class _EffectScanner(ast.NodeVisitor):
     visit_AsyncWith = visit_With
 
     def visit_Try(self, node: ast.Try) -> None:
-        """Report exception-handler semantics that could hide or add effects."""
+        """Inspect every try block while preserving exception-flow uncertainty."""
         self.result.diagnostics.append(_diagnostic("unsupported_semantics", "Try/except effect control flow is outside the Slice 3 model.", _span(self.path, node)))
+        boundary = _boundary(
+            self.path,
+            node,
+            "unsupported_semantics",
+            "try statement",
+            (
+                "Effects inside the protected body, handlers, else, and finally are conditional; "
+                "Saga does not determine which blocks execute on a given call."
+            ),
+            concerns=["effects"],
+        )
+        self._limit_boundary(boundary)
+        self.result.boundaries.append(boundary)
+        self.conditional_boundaries.append(boundary)
+        try:
+            for statement in node.body:
+                self.visit(statement)
+            for handler in node.handlers:
+                for statement in handler.body:
+                    self.visit(statement)
+            for statement in node.orelse:
+                self.visit(statement)
+            for statement in node.finalbody:
+                self.visit(statement)
+        finally:
+            self.conditional_boundaries.pop()
+
+    visit_TryStar = visit_Try
 
     def visit_While(self, node: ast.While) -> None:
         """Report while-loop semantics because only for loops are in the supported subset."""

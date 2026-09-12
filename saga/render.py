@@ -54,9 +54,14 @@ def _boundary_group(
         if group["claim_kinds"]
         else ""
     )
+    limited_by = (
+        f"; limited by {', '.join(group['limiting_boundary_ids'])}"
+        if group["limiting_boundary_ids"]
+        else ""
+    )
     lines.append(
         f"  {prefix} [{group['boundary_class']} · {group['kind']}] "
-        f"{group['target']} — {group['count']} {site_label}{related}: {group['reason']}"
+        f"{group['target']} — {group['count']} {site_label}{related}{limited_by}: {group['reason']}"
     )
     if group["count"] > 1 and not show_sites:
         lines.append("    Re-run with --show-boundary-sites to list every source location.")
