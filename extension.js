@@ -2,7 +2,7 @@ const vscode = require('vscode');
 const cp = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-const { targetNameFromLine, validateCard, claimPresentation, focusCard, localCallEvidence, viewPresentation, observationPresentation, boundaryGroups, diagnosticGroups, hoverLines } = require('./card');
+const { targetNameFromLine, validateCard, claimPresentation, returnPathPresentation, focusCard, localCallEvidence, viewPresentation, observationPresentation, boundaryGroups, diagnosticGroups, hoverLines } = require('./card');
 
 const staticCardCache = new Map();
 
@@ -80,9 +80,21 @@ function panelHtml(card, panel) {
   const view = viewPresentation(card);
   const partition = view.name === 'full' ? undefined : localCallEvidence(card);
   const renderCallChain = (chain) => chain?.length ? `<details><summary>Local call chain</summary><ol>${chain.map((link) => { const bindings = link.argument_bindings.length ? ` (${link.argument_bindings.map((item) => `${item.parameter} = ${item.argument}`).join(', ')})` : ''; return `<li>${esc(link.caller)} → ${esc(link.callee)}${esc(bindings)} · <a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(link.call_site))}">call</a> · <a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(link.callee_span))}">callee</a></li>`; }).join('')}</ol></details>` : '';
-  const renderClaims = (claims) => claims.map((claim) => {
+  const dependencyFacts = (dependency) => {
+    const verb = dependency.kind === 'weak_definition' ? 'may change' : 'defines';
+    const names = dependency.names?.length ? `${verb} ${dependency.names.join(', ')}` : '';
+    const reads = dependency.reads?.length ? `reads ${dependency.reads.join(', ')}` : '';
+    const calls = dependency.calls?.length ? `calls ${dependency.calls.map((call) => call.text).join(', ')}` : '';
+    return [names, reads, calls].filter(Boolean).join('; ') || dependency.kind.replaceAll('_', ' ');
+  };
+  const renderClaims = (claims, returnPathOffset = 0) => claims.map((claim, claimIndex) => {
     const view = claimPresentation(claim);
-    const links = view.sourceSpans.map((span, index) => `<a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(span))}">source ${index + 1}</a>`).join(' · ');
+    const returnPath = card.view === 'return' && claim.kind === 'return_dependency' ? returnPathPresentation(claim) : undefined;
+    const pathNumber = returnPathOffset + claimIndex + 1;
+    const pathLocation = returnPath?.returnSpan ? `${returnPath.returnSpan.path}:${returnPath.returnSpan.start_line}` : 'unknown location';
+    const pathHeading = returnPath ? `<h3>Return path ${pathNumber}: <code>${esc(returnPath.returnExpression)}</code></h3><small>${esc(pathLocation)}</small>${returnPath.pathConditions.length ? `<small>When: ${esc(returnPath.pathConditions.map((item) => `(${item.text || item.source_text || '?'})`).join(' and '))}</small>` : ''}` : '';
+    const ordinaryLinks = view.sourceSpans.map((span, index) => `<a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(span))}">source ${index + 1}</a>`).join(' · ');
+    const links = returnPath?.compact ? '' : ordinaryLinks;
     const assumptions = view.assumptions.length ? `<small>Assumptions: ${esc(view.assumptions.join('; '))}</small>` : '';
     const evidence = `<small>Method: ${esc(view.method)}${view.boundaryIds.length ? ` · Limited by: ${esc(view.boundaryIds.join(', '))}` : ''}</small>`;
     const callChain = renderCallChain(view.callChain);
@@ -92,10 +104,20 @@ function panelHtml(card, panel) {
     const conditionSource = view.conditionSourceText ? `<p>Condition syntax: <code>${esc(view.conditionSourceText)}</code></p>` : '';
     const handlers = view.handlerSpans.length ? `<p>Handlers checked: ${view.handlerSpans.map((span) => `<a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(span))}">${esc(`${span.path}:${span.start_line}`)}</a>`).join(' · ')}</p>` : '';
     const condition = 'condition' in claim.statement ? `<details><summary>Structured condition</summary><pre>${esc(JSON.stringify(view.condition, null, 2))}</pre></details>` : '';
-    const dependencies = view.dependencies.length ? `<details><summary>Why this return may have this value</summary><ul>${view.dependencies.map((dependency) => { const verb = dependency.kind === 'weak_definition' ? 'may change' : 'defines'; const writes = dependency.names?.length ? `${verb} ${dependency.names.join(', ')}` : ''; const reads = dependency.reads?.length ? `reads ${dependency.reads.join(', ')}` : ''; const calls = dependency.calls?.length ? `calls ${dependency.calls.map((call) => call.text).join(', ')}` : ''; const facts = [writes, reads, calls].filter(Boolean).join('; ') || dependency.kind.replaceAll('_', ' '); return `<li>Line ${dependency.source_span.start_line}: ${esc(facts)}</li>`; }).join('')}</ul></details>` : '';
+    const dependencies = view.dependencies.length ? (() => {
+      if (!returnPath?.compact) return `<details><summary>Why this return may have this value</summary><ul>${view.dependencies.map((dependency) => `<li>Line ${dependency.source_span.start_line}: ${esc(dependencyFacts(dependency))}</li>`).join('')}</ul></details>`;
+      const groups = returnPath.groups.map((group) => {
+        const facts = [group.names.length ? `names: ${group.names.join(', ')}` : '', group.reads.length ? `reads: ${group.reads.join(', ')}` : '', group.calls.length ? `calls: ${group.calls.join(', ')}` : ''].filter(Boolean).join('; ');
+        const entries = group.entries.map((dependency) => `<li><a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(dependency.source_span))}">${esc(`${dependency.source_span.path}:${dependency.source_span.start_line}`)}</a> — ${esc(dependencyFacts(dependency))}</li>`).join('');
+        const siteLabel = group.count === 1 ? 'site' : 'sites';
+        return `<details><summary>${esc(group.kind.replaceAll('_', ' '))}: ${group.count} ${siteLabel}</summary>${facts ? `<small>${esc(facts)}</small>` : ''}<ul>${entries}</ul></details>`;
+      }).join('');
+      const extra = returnPath.additionalSourceSpans.length ? `<h4>Additional claim sources</h4><ul>${returnPath.additionalSourceSpans.map((span) => `<li><a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(span))}">${esc(`${span.path}:${span.start_line}`)}</a></li>`).join('')}</ul>` : '';
+      return `<details class="return-sites"><summary>${returnPath.siteCount} dependency sites in ${returnPath.groups.length} groups</summary>${groups}${extra}</details>`;
+    })() : '';
     const localDependencies = view.localCallDependencies.length ? `<details><summary>Inputs carried through local calls</summary><ul>${view.localCallDependencies.map((dependency) => { const inputs = dependency.caller_inputs.length ? `; caller inputs: ${dependency.caller_inputs.join(', ')}` : ''; return `<li>Callee binding: <code>${esc(dependency.callee_scope)}.${esc(dependency.callee_parameter)}</code> = <code>${esc(dependency.caller_argument)}</code> (${esc(dependency.binding_origin + inputs)})${renderCallChain(dependency.call_chain)}</li>`; }).join('')}</ul></details>` : '';
     const detail = view.evidenceClass === 'observed' ? `<details><summary>Observation details</summary><pre>${esc(JSON.stringify(claim.evidence.detail, null, 2))}</pre></details>` : '';
-    return `<article><h3>${esc(label.replaceAll('_', ' '))} <em>${esc(view.evidenceClass)}</em></h3><p>${esc(view.summary)}</p>${sourceExpression}${scope}${conditionSource}${handlers}${condition}${dependencies}${localDependencies}${callChain}${detail}${evidence}${assumptions}<p>${links}</p></article>`;
+    return `<article>${pathHeading}<h3>${esc(label.replaceAll('_', ' '))} <em>${esc(view.evidenceClass)}</em></h3><p>${esc(view.summary)}</p>${sourceExpression}${scope}${conditionSource}${handlers}${condition}${dependencies}${localDependencies}${callChain}${detail}${evidence}${assumptions}${links ? `<p>${links}</p>` : ''}</article>`;
   }).join('');
   const derivedClaims = renderClaims(card.claims.filter((claim) => claim.evidence.evidence_class !== 'observed'));
   const observedClaims = renderClaims(card.claims.filter((claim) => claim.evidence.evidence_class === 'observed'));
@@ -141,6 +163,7 @@ function panelHtml(card, panel) {
   const empty = view.empty ? `<p class="empty">${esc(view.emptyMessage)}</p>` : '';
   const fullContent = `<h2>Derived claims</h2>${derivedClaims || '<p>None</p>'}<h2>Observed claims</h2>${observedClaims}${observationSummary}<h2>Boundaries</h2>${boundaries || '<p>None</p>'}<h2>Diagnostics</h2>${diagnostics || '<p>None</p>'}`;
   const directClaims = partition?.direct.claims || card.claims;
+  const directReturnCount = directClaims.filter((claim) => claim.kind === 'return_dependency').length;
   const directBoundaries = partition?.direct.boundaries || card.boundaries;
   const directDiagnostics = partition?.direct.diagnostics || card.diagnostics;
   const focusedClaims = view.name === 'boundary' ? '' : `<h2>${esc(view.label)}</h2>${empty || renderClaims(directClaims)}`;
@@ -148,6 +171,7 @@ function panelHtml(card, panel) {
   const focusedBoundaries = `<h2>${view.name === 'boundary' ? 'Direct analysis boundaries' : 'Directly related boundaries'}</h2>${view.name === 'boundary' && empty ? empty : focusedBoundaryHtml || '<p>None limit this direct evidence.</p>'}`;
   const focusedDiagnosticHtml = renderDiagnostics(directDiagnostics);
   const focusedDiagnostics = focusedDiagnosticHtml ? `<h2>Target diagnostics</h2>${focusedDiagnosticHtml}` : '';
+  let localReturnOffset = directReturnCount;
   const localCallGroups = (partition?.groups || []).map((group) => {
     const groupedBoundaries = boundaryGroups({ ...card, boundaries: group.boundaries });
     const groupedDiagnostics = diagnosticGroups({ diagnostics: group.diagnostics });
@@ -155,7 +179,8 @@ function panelHtml(card, panel) {
     const callLink = `<a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(group.callSite))}">call at ${esc(`${group.callSite.path}:${group.callSite.start_line}`)}</a>`;
     const calleeLink = `<a href="command:saga.navigate?${encodeURIComponent(JSON.stringify(group.calleeSpan))}">callee</a>`;
     const bindings = group.argumentBindings.length ? `<small>Arguments: ${esc(group.argumentBindings.map((item) => `${item.parameter} = ${item.argument}`).join(', '))}</small>` : '';
-    const claims = group.claims.length ? `<h3>Claims</h3>${renderClaims(group.claims)}` : '';
+    const claims = group.claims.length ? `<h3>Claims</h3>${renderClaims(group.claims, localReturnOffset)}` : '';
+    localReturnOffset += group.claims.filter((claim) => claim.kind === 'return_dependency').length;
     const boundaries = group.boundaries.length ? `<h3>Boundaries</h3>${renderBoundaries(group.boundaries)}` : '';
     const diagnostics = group.diagnostics.length ? `<h3>Diagnostics</h3>${renderDiagnostics(group.diagnostics)}` : '';
     return `<details class="local-call-evidence"><summary><strong>${esc(group.invokedAs)}(...)</strong> · ${esc(counts)}</summary><p>${callLink} · ${calleeLink}</p>${bindings}${claims}${boundaries}${diagnostics}</details>`;

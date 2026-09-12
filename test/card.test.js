@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { loadCard, targetNameFromLine, validateCard, claimPresentation, focusCard, localCallEvidence, viewPresentation, observationPresentation, boundaryGroups, diagnosticGroups, hoverLines } = require('../card');
+const { loadCard, targetNameFromLine, validateCard, claimPresentation, returnPathPresentation, focusCard, localCallEvidence, viewPresentation, observationPresentation, boundaryGroups, diagnosticGroups, hoverLines } = require('../card');
 
 test('fixture validates against the evidence-card contract', () => {
   const card = loadCard();
@@ -71,6 +71,41 @@ test('editor claim presentation preserves composed local return dependencies', (
   const view = claimPresentation(claim);
   assert.deepEqual(view.localCallDependencies, claim.statement.local_call_dependencies);
   assert.deepEqual(view.scope, claim.statement.scope);
+});
+
+test('editor groups large return paths from existing dependency records', () => {
+  const claim = structuredClone(loadCard().claims.find((item) => item.kind === 'return_dependency'));
+  const sourceSpan = (line) => ({ path: 'module.py', start_line: line, start_column: 4, end_line: line, end_column: 12 });
+  const entry = (kind, line, names = [], reads = [], calls = []) => ({
+    kind, names, reads,
+    calls: calls.map((text) => ({ text, source_span: sourceSpan(line) })),
+    source_span: sourceSpan(line)
+  });
+  claim.statement.return_expression = 'result';
+  claim.statement.path_conditions = [{ text: 'enabled is truthy', source_text: 'enabled', source_span: sourceSpan(2) }];
+  claim.evidence.detail.return_source_span = sourceSpan(20);
+  claim.statement.dependencies = [
+    entry('definition', 3, ['result'], ['seed']),
+    entry('definition', 4, ['result'], ['item']),
+    entry('weak_definition', 5, ['result'], ['factor']),
+    entry('control_predicate', 6, [], ['enabled']),
+    entry('statement', 7, [], ['result'], ['normalize(...)']),
+    entry('statement', 8, [], [], ['audit(...)']),
+    entry('statement', 9, [], ['result']),
+    entry('statement', 10, [], ['fallback']),
+    entry('return', 20, [], ['result'])
+  ];
+  claim.source_spans = claim.statement.dependencies.map((item) => item.source_span);
+  const before = structuredClone(claim);
+
+  const view = returnPathPresentation(claim);
+
+  assert.equal(view.compact, true);
+  assert.equal(view.siteCount, 9);
+  assert.deepEqual(view.groups.map((group) => group.kind), ['return', 'definition', 'weak_definition', 'control_predicate', 'statement']);
+  assert.deepEqual(view.groups.find((group) => group.kind === 'definition').reads, ['item', 'seed']);
+  assert.deepEqual(view.groups.find((group) => group.kind === 'statement').calls, ['audit(...)', 'normalize(...)']);
+  assert.deepEqual(claim, before);
 });
 
 test('editor exception presentation preserves handler evidence', () => {

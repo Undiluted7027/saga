@@ -12,6 +12,34 @@ Module._load = originalLoad;
 
 const { focusCard, loadCard } = require('../card');
 
+test('focused return webview groups a large path behind native expansion controls', () => {
+  const card = loadCard();
+  const claim = structuredClone(card.claims.find((item) => item.kind === 'return_dependency'));
+  const sourceSpan = (line) => ({ path: 'module.py', start_line: line, start_column: 4, end_line: line, end_column: 12 });
+  claim.statement.return_expression = 'result';
+  claim.statement.path_conditions = [{ text: 'enabled is truthy', source_text: 'enabled', source_span: sourceSpan(2) }];
+  claim.evidence.detail.return_source_span = sourceSpan(20);
+  claim.statement.dependencies = Array.from({ length: 9 }, (_, index) => ({
+    kind: index === 8 ? 'return' : 'definition',
+    names: index === 8 ? [] : ['result'],
+    reads: [`input_${index}`],
+    calls: index === 4 ? [{ text: 'normalize(...)', source_span: sourceSpan(index + 3) }] : [],
+    source_span: sourceSpan(index + 3)
+  }));
+  claim.source_spans = [...claim.statement.dependencies.map((item) => item.source_span), sourceSpan(30)];
+  const focused = focusCard({ ...card, claims: [claim], boundaries: [], diagnostics: [] }, 'return');
+
+  const html = panelHtml(focused, { webview: { cspSource: 'vscode-webview://test' } });
+
+  assert.match(html, /Return path 1: <code>result<\/code>/);
+  assert.match(html, /When: \(enabled is truthy\)/);
+  assert.match(html, /<details class="return-sites"><summary>9 dependency sites in 2 groups<\/summary>/);
+  assert.match(html, /definition: 8 sites/);
+  assert.match(html, /normalize\(\.\.\.\)/);
+  assert.match(html, /module\.py:30/);
+  assert.doesNotMatch(html, />source 10<\/a>/);
+});
+
 test('focused webview collapses propagated evidence beneath a native details group', () => {
   const card = loadCard();
   const direct = structuredClone(card.claims.find((claim) => claim.kind === 'attempted_write'));

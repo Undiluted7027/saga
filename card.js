@@ -86,6 +86,57 @@ function claimPresentation(claim) {
   };
 }
 
+const RETURN_SITE_LIMIT = 8;
+const RETURN_DEPENDENCY_KINDS = ['return', 'definition', 'weak_definition', 'control_predicate', 'statement'];
+
+function returnPathPresentation(claim) {
+  /** Group existing dependency entries for display without changing the claim. */
+  const dependencies = claim.statement?.dependencies || [];
+  const byKind = new Map(RETURN_DEPENDENCY_KINDS.map((kind) => [kind, []]));
+  const extraKinds = [];
+  for (const dependency of dependencies) {
+    const kind = dependency.kind || 'statement';
+    if (!byKind.has(kind)) {
+      byKind.set(kind, []);
+      extraKinds.push(kind);
+    }
+    byKind.get(kind).push(dependency);
+  }
+  const groups = [...RETURN_DEPENDENCY_KINDS, ...extraKinds].flatMap((kind) => {
+    const entries = byKind.get(kind);
+    if (!entries.length) return [];
+    const union = (field) => [...new Set(entries.flatMap((item) => item[field] || []))].sort();
+    return [{
+      kind,
+      count: entries.length,
+      names: union('names'),
+      reads: union('reads'),
+      calls: [...new Set(entries.flatMap((item) => (item.calls || []).map((call) => call.text)))].sort(),
+      entries
+    }];
+  });
+  const returnEntry = dependencies.find((item) => item.kind === 'return');
+  const spanKey = (span) => JSON.stringify([
+    span.path,
+    span.start_line,
+    span.start_column,
+    span.end_line,
+    span.end_column
+  ]);
+  const dependencySpanKeys = new Set(dependencies.map((item) => spanKey(item.source_span)));
+  return {
+    compact: dependencies.length > RETURN_SITE_LIMIT,
+    siteCount: dependencies.length,
+    returnExpression: claim.statement.return_expression || claim.statement.source_text || '?',
+    pathConditions: claim.statement.path_conditions || [],
+    returnSpan: claim.evidence?.detail?.return_source_span || returnEntry?.source_span || claim.source_spans?.at(-1),
+    groups,
+    dependencies,
+    sourceSpans: claim.source_spans || [],
+    additionalSourceSpans: (claim.source_spans || []).filter((span) => !dependencySpanKeys.has(spanKey(span)))
+  };
+}
+
 function focusCard(card, view = 'full') {
   /** Return a fixed projection while retaining the original evidence objects. */
   if (view === 'full') return card;
@@ -317,4 +368,4 @@ function hoverLines(card) {
   return lines;
 }
 
-module.exports = { loadCard, targetNameFromLine, validateCard, claimPresentation, focusCard, localCallEvidence, viewPresentation, observationPresentation, boundaryGroups, diagnosticGroups, hoverLines };
+module.exports = { loadCard, targetNameFromLine, validateCard, claimPresentation, returnPathPresentation, focusCard, localCallEvidence, viewPresentation, observationPresentation, boundaryGroups, diagnosticGroups, hoverLines };

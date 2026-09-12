@@ -46,6 +46,11 @@ Focused views keep evidence from module-local callees collapsed beneath each
 call site. Use `--show-local-call-evidence` to expand it in the terminal; the
 editor exposes the same detail through expandable local-call groups.
 
+Return paths with more than eight dependency sites are grouped by the kind of
+evidence already recorded on the claim. Use `--show-return-sites` to list every
+site in terminal output; the editor expands the same entries under the return
+path. Smaller paths keep their source links expanded.
+
 To add test-observed evidence, install/use the optional test extra and run the
 tests through Saga:
 

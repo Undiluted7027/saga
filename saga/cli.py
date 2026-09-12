@@ -52,6 +52,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="expand evidence grouped beneath module-local call sites",
     )
+    inspect_parser.add_argument(
+        "--show-return-sites",
+        action="store_true",
+        help="expand dependency sites in large return paths",
+    )
     test_parser = subparsers.add_parser("test", help="run pytest with selected-target instrumentation")
     test_parser.add_argument("selector", help="target in the form path.py::qualified_name")
     test_parser.add_argument("--format", choices=("json", "terminal"), default="json")
@@ -82,6 +87,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="expand evidence grouped beneath module-local call sites",
     )
+    test_parser.add_argument(
+        "--show-return-sites",
+        action="store_true",
+        help="expand dependency sites in large return paths",
+    )
     args = parser.parse_args(raw_argv)
     if "::" not in args.selector or args.selector.count("::") != 1:
         parser.error("selector must have the form path.py::qualified_name")
@@ -102,6 +112,7 @@ def main(argv: list[str] | None = None) -> int:
                 show_boundary_sites=args.show_boundary_sites,
                 show_diagnostic_sites=args.show_diagnostic_sites,
                 show_local_call_evidence=args.show_local_call_evidence,
+                show_return_sites=args.show_return_sites,
             )
         )
     return exit_code

@@ -7,6 +7,7 @@ from typing import Any
 from .boundaries import group_boundaries
 from .diagnostics import group_diagnostics
 from .local_evidence import partition_local_call_evidence
+from .return_evidence import return_path_presentation
 from .views import EMPTY_MESSAGES, VIEW_LABELS, view_is_empty
 
 
@@ -80,10 +81,108 @@ def _boundary_group(
         _local_call_chain(lines, occurrence["call_chain"])
 
 
-def _claim_lines(lines: list[str], claim: dict[str, Any], indent: str = "  ") -> None:
+def _dependency_facts(dependency: dict[str, Any]) -> str:
+    """Render only facts already recorded on one dependency entry."""
+    verb = "may change" if dependency["kind"] == "weak_definition" else "defines"
+    facts = []
+    if dependency.get("names"):
+        facts.append(f"{verb} {', '.join(dependency['names'])}")
+    if dependency.get("reads"):
+        facts.append(f"reads {', '.join(dependency['reads'])}")
+    if dependency.get("calls"):
+        facts.append(
+            "calls " + ", ".join(call["text"] for call in dependency["calls"])
+        )
+    return "; ".join(facts) or dependency["kind"].replace("_", " ")
+
+
+def _return_path_lines(
+    lines: list[str],
+    claim: dict[str, Any],
+    path_number: int,
+    show_return_sites: bool,
+    indent: str,
+) -> bool:
+    """Render a focused return-path heading and compact large dependency sets."""
+    view = return_path_presentation(claim)
+    span = view["return_span"]
+    location = f"{span['path']}:{span['start_line']}" if span else "unknown location"
+    lines.append(
+        f"{indent}Return path {path_number}: {view['return_expression']} at {location}"
+    )
+    if view["path_conditions"]:
+        conditions = " and ".join(
+            f"({item.get('text', item.get('source_text', '?'))})"
+            for item in view["path_conditions"]
+        )
+        lines.append(f"{indent}  When: {conditions}")
+    if not view["compact"]:
+        return False
+
+    lines.append(f"{indent}  Dependency sites: {view['site_count']} in {len(view['groups'])} groups")
+    for group in view["groups"]:
+        site_label = "site" if group["count"] == 1 else "sites"
+        lines.append(
+            f"{indent}    {group['kind'].replace('_', ' ')}: "
+            f"{group['count']} {site_label}"
+        )
+        if group["names"]:
+            lines.append(f"{indent}      Names: {', '.join(group['names'])}")
+        if group["reads"]:
+            lines.append(f"{indent}      Reads: {', '.join(group['reads'])}")
+        if group["calls"]:
+            lines.append(f"{indent}      Calls: {', '.join(group['calls'])}")
+        if show_return_sites:
+            for dependency in group["entries"]:
+                source = dependency["source_span"]
+                lines.append(
+                    f"{indent}      {source['path']}:{source['start_line']} — "
+                    f"{_dependency_facts(dependency)}"
+                )
+    if not show_return_sites:
+        lines.append(
+            f"{indent}  Dependency sites are collapsed; re-run with "
+            "--show-return-sites to expand them."
+        )
+    else:
+        dependency_spans = {
+            (
+                item["source_span"]["path"],
+                item["source_span"]["start_line"],
+                item["source_span"]["start_column"],
+                item["source_span"]["end_line"],
+                item["source_span"]["end_column"],
+            )
+            for item in view["dependencies"]
+        }
+        for source in view["source_spans"]:
+            key = (
+                source["path"], source["start_line"], source["start_column"],
+                source["end_line"], source["end_column"],
+            )
+            if key not in dependency_spans:
+                lines.append(
+                    f"{indent}      Additional claim source: "
+                    f"{source['path']}:{source['start_line']}"
+                )
+    return True
+
+
+def _claim_lines(
+    lines: list[str],
+    claim: dict[str, Any],
+    indent: str = "  ",
+    return_path_number: int | None = None,
+    show_return_sites: bool = False,
+) -> None:
     """Render one claim without changing or summarizing its evidence."""
     detail_indent = indent + "  "
     statement = claim["statement"]
+    compact_return = False
+    if return_path_number is not None and claim["kind"] == "return_dependency":
+        compact_return = _return_path_lines(
+            lines, claim, return_path_number, show_return_sites, indent
+        )
     label = statement.get("type", claim["kind"])
     lines.append(
         f"{indent}Claim [{label}; {claim['evidence']['evidence_class']}]: "
@@ -172,8 +271,9 @@ def _claim_lines(lines: list[str], claim: dict[str, Any], indent: str = "  ") ->
                 f"{name}: {value}" for name, value in detail["environment"].items()
             )
             lines.append(f"{detail_indent}Environment: {environment}")
-    for span in claim["source_spans"]:
-        lines.append(f"{detail_indent}Source: {span['path']}:{span['start_line']}")
+    if not compact_return:
+        for span in claim["source_spans"]:
+            lines.append(f"{detail_indent}Source: {span['path']}:{span['start_line']}")
     for assumption in claim["assumptions"]:
         lines.append(f"{detail_indent}Assumption: {assumption['text']}")
 
@@ -210,6 +310,7 @@ def terminal(
     show_boundary_sites: bool = False,
     show_diagnostic_sites: bool = False,
     show_local_call_evidence: bool = False,
+    show_return_sites: bool = False,
 ) -> str:
     """Render the structured card for concise terminal inspection."""
     target = card["target"]
@@ -248,8 +349,16 @@ def terminal(
         if partition
         else card
     )
+    return_path_number = 0
     for claim in rendered_card["claims"]:
-        _claim_lines(lines, claim)
+        if view == "return" and claim["kind"] == "return_dependency":
+            return_path_number += 1
+        _claim_lines(
+            lines,
+            claim,
+            return_path_number=return_path_number or None,
+            show_return_sites=show_return_sites,
+        )
     groups = group_boundaries({**rendered_card, "claims": card["claims"]})
     important_groups = [group for group in groups if group["category"] != "routine"]
     routine_groups = [group for group in groups if group["category"] == "routine"]
@@ -367,7 +476,15 @@ def terminal(
                 )
                 continue
             for claim in local_group["claims"]:
-                _claim_lines(lines, claim, indent="    ")
+                if view == "return" and claim["kind"] == "return_dependency":
+                    return_path_number += 1
+                _claim_lines(
+                    lines,
+                    claim,
+                    indent="    ",
+                    return_path_number=return_path_number or None,
+                    show_return_sites=show_return_sites,
+                )
             for group in boundary_groups:
                 _boundary_group(
                     lines,
