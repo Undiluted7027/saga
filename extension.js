@@ -2,7 +2,7 @@ const vscode = require('vscode');
 const cp = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-const { targetNameFromLine, validateCard, claimPresentation, focusCard, viewPresentation, boundaryGroups, diagnosticGroups, hoverLines } = require('./card');
+const { targetNameFromLine, validateCard, claimPresentation, focusCard, viewPresentation, observationPresentation, boundaryGroups, diagnosticGroups, hoverLines } = require('./card');
 
 const staticCardCache = new Map();
 
@@ -121,8 +121,15 @@ function panelHtml(card, panel) {
     return `<article class="diagnostic"><h3>${esc(group.kind)} <em>${esc(group.analyses.join(', '))}</em></h3><p>${esc(group.message)}</p>${locations}</article>`;
   }).join('');
   const observationStatus = card.observation_status;
+  const observationView = observationPresentation(observationStatus);
+  const excludedParameters = observationView?.excludedParameters.length
+    ? `<small>Excluded parameters: ${esc(observationView.excludedParameters.map((parameter) => { const kinds = parameter.serialization_kinds.join(', '); const types = parameter.types.length ? `; types: ${parameter.types.join(', ')}` : ''; return `${parameter.name} (${kinds}${types})`; }).join(', '))}</small>`
+    : '';
+  const usableInputCount = observationView
+    ? `<small>${esc(observationView.distinctInputSummary)}</small>`
+    : '';
   const observationSummary = observationStatus
-    ? `<article class="observation-status"><h3>${esc(observationStatus.state.replaceAll('_', ' '))}</h3><p>${esc(observationStatus.message)}</p><small>${observationStatus.execution_count} executions · ${observationStatus.returned_executions} returned · ${observationStatus.raised_executions} raised · reason: ${esc(observationStatus.reason.replaceAll('_', ' '))}</small>${observationStatus.tests.length ? `<small>Tests: ${esc(observationStatus.tests.join(', '))}</small>` : ''}${Object.keys(observationStatus.environment).length ? `<small>Environment: ${esc(Object.entries(observationStatus.environment).map(([name, value]) => `${name}: ${value}`).join(', '))}</small>` : ''}</article>`
+    ? `<article class="observation-status"><h3>${esc(observationStatus.state.replaceAll('_', ' '))}</h3><p>${esc(observationView.message)}</p><small>${esc(observationView.executionSummary)} · reason: ${esc(observationStatus.reason.replaceAll('_', ' '))}</small>${usableInputCount}${excludedParameters}${observationStatus.tests.length ? `<small>Tests: ${esc(observationStatus.tests.join(', '))}</small>` : ''}${Object.keys(observationStatus.environment).length ? `<small>Environment: ${esc(Object.entries(observationStatus.environment).map(([name, value]) => `${name}: ${value}`).join(', '))}</small>` : ''}</article>`
     : '<p>No completed test trace is attached to this card.</p>';
   const request = (name) => encodeURIComponent(JSON.stringify({ path: card.target.path, name: card.target.name, view: name }));
   const navigation = `<nav><a href="command:saga.openEvidenceCard?${request('full')}">Full card</a> · <a href="command:saga.openEvidenceCard?${request('return')}">Return</a> · <a href="command:saga.openEvidenceCard?${request('mutation')}">Mutation</a> · <a href="command:saga.openEvidenceCard?${request('failure')}">Failure</a> · <a href="command:saga.openEvidenceCard?${request('boundary')}">Boundaries</a></nav>`;

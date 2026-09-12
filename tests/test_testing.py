@@ -73,6 +73,49 @@ class TestCommandStatusTests(unittest.TestCase):
             for item in card["diagnostics"]
         ))
 
+    def test_instrumented_callbacks_leave_one_distinct_usable_input(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "exposure.py"
+            target.write_text(
+                "def compute_exposure(account_id, fetch_balance):\n"
+                "    return fetch_balance(account_id)\n",
+                encoding="utf-8",
+            )
+            tests = root / "test_exposure.py"
+            tests.write_text(
+                "from exposure import compute_exposure\n\n"
+                "def test_low():\n"
+                "    assert compute_exposure(7, lambda _: 10) == 10\n\n"
+                "def test_medium():\n"
+                "    assert compute_exposure(7, lambda _: 20) == 20\n\n"
+                "def test_high():\n"
+                "    assert compute_exposure(7, lambda _: 30) == 30\n",
+                encoding="utf-8",
+            )
+            card, exit_code = run_tests(
+                f"{target}::compute_exposure",
+                [str(tests), "-q"],
+                str(root / "trace.json"),
+                directory,
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertFalse([
+            claim for claim in card["claims"]
+            if claim["kind"] == "test_observation"
+        ])
+        self.assertEqual(card["observation_status"]["returned_executions"], 3)
+        self.assertEqual(card["observation_status"]["distinct_inputs"], 1)
+        self.assertEqual(
+            card["observation_status"]["excluded_parameters"],
+            [{
+                "name": "fetch_balance",
+                "serialization_kinds": ["unsupported"],
+                "types": ["builtins.function"],
+            }],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

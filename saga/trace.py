@@ -27,6 +27,8 @@ def serialize_value(value: Any, field_name: str | None = None, depth: int = 0) -
         return value
     if isinstance(value, float):
         return value if math.isfinite(value) else {"kind": "non_finite", "type": "float"}
+    if callable(value):
+        return {"kind": "unsupported", "type": _type_name(value)}
     if depth >= MAX_DEPTH:
         return {"kind": "truncated", "type": _type_name(value)}
     if isinstance(value, (list, tuple)):

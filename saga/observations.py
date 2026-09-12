@@ -42,12 +42,82 @@ def _domain(values: list[Any]) -> dict[str, Any]:
     return {"kind": "observed_values", "distinct": len(unique), "examples": examples[:4]}
 
 
+def _unusable_metadata(value: Any) -> tuple[set[str], set[str]]:
+    """Collect only safe marker kinds and type names from an unusable value."""
+    kinds: set[str] = set()
+    types: set[str] = set()
+    if isinstance(value, dict):
+        kind = value.get("kind")
+        if kind in {"unsupported", "redacted", "truncated", "non_finite"}:
+            kinds.add(kind)
+            if isinstance(value.get("type"), str):
+                types.add(value["type"])
+        for item in value.values():
+            child_kinds, child_types = _unusable_metadata(item)
+            kinds.update(child_kinds)
+            types.update(child_types)
+    elif isinstance(value, list):
+        for item in value:
+            child_kinds, child_types = _unusable_metadata(item)
+            kinds.update(child_kinds)
+            types.update(child_types)
+    return kinds, types
+
+
+def _input_evidence(
+    returned: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    """Project returned executions onto parameters safe enough to fingerprint."""
+    names = sorted({name for item in returned for name in item.get("input", {})})
+    excluded: list[dict[str, Any]] = []
+    excluded_names: set[str] = set()
+    for name in names:
+        values = [item.get("input", {}).get(name) for item in returned]
+        if not any(contains_unusable_value(value) for value in values):
+            continue
+        kinds: set[str] = set()
+        types: set[str] = set()
+        for value in values:
+            value_kinds, value_types = _unusable_metadata(value)
+            kinds.update(value_kinds)
+            types.update(value_types)
+        excluded_names.add(name)
+        excluded.append({
+            "name": name,
+            "serialization_kinds": sorted(kinds),
+            "types": sorted(types),
+        })
+
+    projected = [
+        {
+            name: value
+            for name, value in item.get("input", {}).items()
+            if name not in excluded_names
+        }
+        for item in returned
+    ]
+    domain = {
+        name: _domain([item.get("input", {}).get(name) for item in returned])
+        for name in names
+        if name not in excluded_names
+    }
+    for item in excluded:
+        domain[item["name"]] = {
+            "kind": "excluded",
+            "serialization_kinds": item["serialization_kinds"],
+            "types": item["types"],
+        }
+    return projected, excluded, domain
+
+
 def _status(
     trace: dict[str, Any],
     reason: str,
     message: str,
     distinct_inputs: int = 0,
     distinct_outputs: int = 0,
+    excluded_parameters: list[dict[str, Any]] | None = None,
+    input_domain: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Describe one template-evaluation result without turning it into a claim."""
     executions = trace.get("executions", [])
@@ -64,6 +134,8 @@ def _status(
         ),
         "distinct_inputs": distinct_inputs,
         "distinct_outputs": distinct_outputs,
+        "excluded_parameters": excluded_parameters or [],
+        "input_domain": input_domain or {},
         "tests": sorted({
             item.get("test_id", "<unknown>") for item in executions
         }),
@@ -90,39 +162,52 @@ def evaluate_observations(
             "no_successful_returns",
             "Tests reached the selected function, but every recorded execution raised.",
         ))
-    if any(
-        contains_unusable_value(item.get("input", {}))
-        or contains_unusable_value(item.get("return"))
-        for item in returned
-    ):
+    projected_inputs, excluded_parameters, input_domain = _input_evidence(returned)
+    if any(contains_unusable_value(item.get("return")) for item in returned):
         return ObservationResult([], _status(
             trace,
             "unusable_serialized_values",
-            "Saga could not evaluate observations because a recorded input or return was redacted, truncated, non-finite, or unsupported.",
+            "Saga could not evaluate observations because a recorded return was redacted, truncated, non-finite, or unsupported.",
+            excluded_parameters=excluded_parameters,
+            input_domain=input_domain,
         ))
     if not all(_number(item.get("return")) for item in returned):
         return ObservationResult([], _status(
             trace,
             "unsupported_return_shape",
             "Tests recorded returns, but no current observation template supports their serialized shape.",
+            excluded_parameters=excluded_parameters,
+            input_domain=input_domain,
         ))
     if any(item["return"] < 0 for item in returned):
         return ObservationResult([], _status(
             trace,
             "template_contradicted",
             "At least one negative return contradicted the non-negative numeric template, so Saga produced no observation claim.",
+            excluded_parameters=excluded_parameters,
+            input_domain=input_domain,
         ))
     distinct: dict[str, dict[str, Any]] = {}
-    for item in returned:
-        distinct.setdefault(_fingerprint(item["input"]), item)
+    for item, projected_input in zip(returned, projected_inputs, strict=True):
+        distinct.setdefault(_fingerprint(projected_input), item)
     returns = [item["return"] for item in distinct.values()]
     if len(distinct) < 2:
+        excluded_names = ", ".join(
+            item["name"] for item in excluded_parameters
+        )
+        exclusion = (
+            f" after excluding {excluded_names}"
+            if excluded_names
+            else ""
+        )
         return ObservationResult([], _status(
             trace,
             "insufficient_distinct_inputs",
-            "Saga recorded fewer than two distinct inputs, so the template has too little support.",
+            f"Saga recorded fewer than two distinct usable inputs{exclusion}, so the template has too little support.",
             distinct_inputs=len(distinct),
             distinct_outputs=len(set(returns)),
+            excluded_parameters=excluded_parameters,
+            input_domain=input_domain,
         ))
     if len(set(returns)) < 2:
         return ObservationResult([], _status(
@@ -131,9 +216,9 @@ def evaluate_observations(
             "Distinct inputs produced fewer than two distinct returns, so Saga did not emit the numeric observation claim.",
             distinct_inputs=len(distinct),
             distinct_outputs=len(set(returns)),
+            excluded_parameters=excluded_parameters,
+            input_domain=input_domain,
         ))
-    input_names = sorted({name for item in distinct.values() for name in item["input"]})
-    input_domain = {name: _domain([item["input"].get(name) for item in distinct.values()]) for name in input_names}
     tests = sorted({item["test_id"] for item in returned})
     claims = [{
         "id": "observation-numeric-return-nonnegative",
@@ -162,4 +247,6 @@ def evaluate_observations(
         "Saga produced an observed claim from the recorded executions.",
         distinct_inputs=len(distinct),
         distinct_outputs=len(set(returns)),
+        excluded_parameters=excluded_parameters,
+        input_domain=input_domain,
     ))

@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { loadCard, targetNameFromLine, validateCard, claimPresentation, focusCard, viewPresentation, boundaryGroups, diagnosticGroups, hoverLines } = require('../card');
+const { loadCard, targetNameFromLine, validateCard, claimPresentation, focusCard, viewPresentation, observationPresentation, boundaryGroups, diagnosticGroups, hoverLines } = require('../card');
 
 test('fixture validates against the evidence-card contract', () => {
   const card = loadCard();
@@ -181,10 +181,15 @@ test('focused editor views preserve test observation status', () => {
     raised_executions: 0,
     distinct_inputs: 0,
     distinct_outputs: 0,
+    excluded_parameters: [{ name: 'fetch_balance', serialization_kinds: ['unsupported'], types: ['builtins.function'] }],
+    input_domain: { fetch_balance: { kind: 'excluded', serialization_kinds: ['unsupported'], types: ['builtins.function'] } },
     tests: ['test_report'],
     environment: { python_version: '3.12' }
   };
   assert.equal(focusCard(card, 'return').observation_status, card.observation_status);
+  const presentation = observationPresentation(card.observation_status);
+  assert.equal(presentation.distinctInputSummary, '0 distinct usable inputs');
+  assert.equal(presentation.excludedParameters[0].name, 'fetch_balance');
 });
 
 test('editor boundary and empty views do not imply completeness', () => {

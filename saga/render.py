@@ -17,6 +17,10 @@ def _compact_domain(domain: Any) -> str:
         return f"numeric {domain.get('min')}–{domain.get('max')} ({domain.get('distinct', 0)} distinct)"
     if domain.get("kind") == "observed_values":
         return f"{domain.get('distinct', 0)} observed values"
+    if domain.get("kind") == "excluded":
+        kinds = ", ".join(domain.get("serialization_kinds", [])) or "unusable"
+        types = ", ".join(domain.get("types", []))
+        return f"excluded ({kinds}{f'; types: {types}' if types else ''})"
     return str(domain.get("kind", "unknown"))
 
 
@@ -191,6 +195,24 @@ def terminal(
             f"{observation_status['returned_executions']} returned, "
             f"{observation_status['raised_executions']} raised"
         )
+        lines.append(
+            f"    Distinct usable inputs: {observation_status['distinct_inputs']}"
+        )
+        if observation_status.get("excluded_parameters"):
+            excluded = []
+            for parameter in observation_status["excluded_parameters"]:
+                kinds = ", ".join(parameter["serialization_kinds"])
+                types = ", ".join(parameter["types"])
+                excluded.append(
+                    f"{parameter['name']} ({kinds}{f'; types: {types}' if types else ''})"
+                )
+            lines.append("    Excluded parameters: " + ", ".join(excluded))
+        if observation_status.get("input_domain"):
+            domains = ", ".join(
+                f"{name}: {_compact_domain(domain)}"
+                for name, domain in observation_status["input_domain"].items()
+            )
+            lines.append(f"    Input domain: {domains}")
         if observation_status["tests"]:
             lines.append(
                 "    Tests: " + ", ".join(observation_status["tests"])

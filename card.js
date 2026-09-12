@@ -126,6 +126,18 @@ function viewPresentation(card) {
   };
 }
 
+function observationPresentation(status) {
+  /** Expose runtime status fields without interpreting observations as proof. */
+  if (!status) return undefined;
+  return {
+    message: status.message,
+    executionSummary: `${status.execution_count} executions · ${status.returned_executions} returned · ${status.raised_executions} raised`,
+    distinctInputSummary: `${status.distinct_inputs} distinct usable inputs`,
+    excludedParameters: status.excluded_parameters || [],
+    inputDomain: status.input_domain || {}
+  };
+}
+
 function boundaryClass(boundary) {
   /** Classify why analysis stopped without changing the raw boundary. */
   if (boundary.category === 'routine') return 'routine_call';
@@ -251,4 +263,4 @@ function hoverLines(card) {
   return lines;
 }
 
-module.exports = { loadCard, targetNameFromLine, validateCard, claimPresentation, focusCard, viewPresentation, boundaryGroups, diagnosticGroups, hoverLines };
+module.exports = { loadCard, targetNameFromLine, validateCard, claimPresentation, focusCard, viewPresentation, observationPresentation, boundaryGroups, diagnosticGroups, hoverLines };
