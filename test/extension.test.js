@@ -1,14 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const Module = require('node:module');
-
-const originalLoad = Module._load;
-Module._load = function loadWithVscodeStub(request, parent, isMain) {
-  if (request === 'vscode') return {};
-  return originalLoad.call(this, request, parent, isMain);
-};
-const { panelHtml } = require('../extension');
-Module._load = originalLoad;
+const fs = require('node:fs');
+const path = require('node:path');
+const { panelHtml } = require('../webview');
 
 const { focusCard, loadCard } = require('../card');
 
@@ -29,15 +23,16 @@ test('focused return webview groups a large path behind native expansion control
   claim.source_spans = [...claim.statement.dependencies.map((item) => item.source_span), sourceSpan(30)];
   const focused = focusCard({ ...card, claims: [claim], boundaries: [], diagnostics: [] }, 'return');
 
-  const html = panelHtml(focused, { webview: { cspSource: 'vscode-webview://test' } });
+  const html = panelHtml(focused, { webview: { cspSource: 'vscode-webview://test' } }, 'vscode-webview://test/media/evidence-card.css');
 
-  assert.match(html, /Return path 1: <code>result<\/code>/);
-  assert.match(html, /When: \(enabled is truthy\)/);
-  assert.match(html, /<details class="return-sites"><summary>9 dependency sites in 2 groups<\/summary>/);
-  assert.match(html, /definition: 8 sites/);
+  assert.match(html, /<span class="eyebrow">Return path 1<\/span><code>result<\/code>/);
+  assert.match(html, /<strong>When<\/strong> enabled is truthy/);
+  assert.match(html, /<details class="return-sites"><summary><span>Dependency evidence<\/span><span class="count">9 sites · 2 groups<\/span><\/summary>/);
+  assert.match(html, /<span>definition<\/span><span class="count">8 sites<\/span>/);
   assert.match(html, /normalize\(\.\.\.\)/);
-  assert.match(html, /module\.py:30/);
-  assert.doesNotMatch(html, />source 10<\/a>/);
+  assert.match(html, /Additional claim sources/);
+  assert.match(html, /Source 1 · line 30/);
+  assert.match(html, /aria-current="page"[^>]*>Returns<\/a>/);
 });
 
 test('focused webview collapses propagated evidence beneath a native details group', () => {
@@ -79,12 +74,68 @@ test('focused webview collapses propagated evidence beneath a native details gro
     diagnostics: [diagnostic]
   }, 'mutation');
 
-  const html = panelHtml(focused, { webview: { cspSource: 'vscode-webview://test' } });
+  const html = panelHtml(focused, { webview: { cspSource: 'vscode-webview://test' } }, 'vscode-webview://test/media/evidence-card.css');
 
   assert.match(html, /<details class="local-call-evidence">/);
-  assert.match(html, /helper\(\.\.\.\).*1 claim, 1 boundary group, 1 diagnostic group/);
+  assert.match(html, /<code>helper\(\.\.\.\)<\/code><small>1 claim · 1 boundary group · 1 diagnostic group<\/small>/);
   assert.ok(html.indexOf('Attempts to write caller state.') < html.indexOf('Evidence inside local calls'));
   assert.ok(html.indexOf('Evidence inside local calls') < html.indexOf('helper(...) may attempt to write callee state.'));
   assert.match(html, /command:saga\.navigate/);
-  assert.match(html, /default-src &#39;none&#39;|default-src 'none'/);
+  assert.match(html, /default-src 'none'; style-src vscode-webview:\/\/test;/);
+  assert.match(html, /<link rel="stylesheet" href="vscode-webview:\/\/test\/media\/evidence-card\.css">/);
+  assert.doesNotMatch(html, /<style|<script/);
+  assert.equal((html.match(/Local call chain/g) || []).length, 2);
+});
+
+test('overview separates supported facts, observations, limits, and analyzer reports', () => {
+  const card = loadCard();
+  const html = panelHtml(card, { webview: { cspSource: 'vscode-webview://test' } }, 'style.css');
+
+  assert.match(html, /<html lang="en">/);
+  assert.match(html, /<nav class="view-tabs" aria-label="Evidence views">/);
+  assert.match(html, /aria-current="page"[^>]*>Overview<\/a>/);
+  assert.match(html, /What Saga derived/);
+  assert.match(html, /class="overview-claim-group"/);
+  assert.match(html, /Which values and branches can feed the result\?/);
+  assert.match(html, /What state or external system can this function touch\?/);
+  assert.match(html, /Which inputs are rejected, and which exceptions can escape\?/);
+  assert.match(html, /What tests observed/);
+  assert.match(html, /Where Saga stopped/);
+  assert.match(html, /What needs attention/);
+  assert.match(html, /Evidence classes stay separate/);
+  assert.match(html, /role="group" aria-label="Source evidence"/);
+});
+
+test('focused metrics say that their counts belong to the current view', () => {
+  const card = focusCard(loadCard(), 'failure');
+  const html = panelHtml(card, { webview: { cspSource: 'vscode-webview://test' } }, 'style.css');
+
+  assert.match(html, /<dt>Claims in view<\/dt>/);
+  assert.match(html, /<dt>Boundaries in view<\/dt>/);
+  assert.match(html, /<dt>Diagnostics in view<\/dt>/);
+  assert.match(html, /<dt>Local calls<\/dt>/);
+  assert.doesNotMatch(html, /<dt>Derived<\/dt>/);
+});
+
+test('webview escapes analyzed source and uses an external theme-aware stylesheet', () => {
+  const card = loadCard();
+  card.target.name = '<img src=x onerror=alert(1)>';
+  card.target.signature = 'def inspect(value="<&")';
+  const html = panelHtml(card, { webview: { cspSource: 'vscode-webview://test' } }, 'style.css');
+  const css = fs.readFileSync(path.join(__dirname, '..', 'media', 'evidence-card.css'), 'utf8');
+
+  assert.doesNotMatch(html, /<img src=x/);
+  assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.match(html, /value=&quot;&lt;&amp;&quot;/);
+  assert.match(css, /--vscode-editor-background/);
+  assert.match(css, /:focus-visible/);
+  assert.match(css, /@media \(forced-colors: active\)/);
+  assert.match(css, /@media \(max-width: 680px\)/);
+});
+
+test('extension loads the stylesheet as a local webview resource without enabling scripts', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'extension.js'), 'utf8');
+  assert.match(source, /localResourceRoots: \[mediaRoot\]/);
+  assert.match(source, /asWebviewUri\(vscode\.Uri\.joinPath\(mediaRoot, 'evidence-card\.css'\)\)/);
+  assert.match(source, /enableScripts: false/);
 });

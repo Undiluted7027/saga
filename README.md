@@ -79,5 +79,8 @@ as an extension through the Extension Development Host (`Run Extension`), and
 open `fixture/process_order.py`. Place the cursor on `process_order`, then use
 `Saga: Open Evidence Card`. In the card, choose `Run tests for this function`
 to see derived and observed claims in separate sections. Source links navigate
-back to the supporting code. The hover, card navigation, and command palette
-also open the four focused views directly.
+back to the supporting code. Use the tabs to narrow the card to returns, writes
+and effects, escaping failures, or analysis limits. Focused views count only the
+evidence currently shown; evidence propagated from a local call stays collapsed
+under that call until you inspect it. The hover and command palette open the
+same focused views directly.
