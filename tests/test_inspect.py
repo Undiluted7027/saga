@@ -491,9 +491,70 @@ class InspectFunctionTests(unittest.TestCase):
         self.assertIn(boundary["id"], claim["boundary_ids"])
 
     def test_raising_a_modeled_builtin_exception_is_not_an_unresolved_call(self):
-        path = self.write("def fail(order):\n    order.status = 'failed'\n    raise RuntimeError('stop')\n")
-        card = inspect_function(path, "fail")
-        self.assertFalse([boundary for boundary in card["boundaries"] if boundary["kind"] == "unresolved_call"])
+        for exception in ("RuntimeError", "NotImplementedError"):
+            with self.subTest(exception=exception):
+                path = self.write(
+                    "def fail(order):\n"
+                    "    order.status = 'failed'\n"
+                    f"    raise {exception}('stop')\n"
+                )
+                card = inspect_function(path, "fail")
+                self.assertFalse(
+                    [
+                        boundary
+                        for boundary in card["boundaries"]
+                        if boundary["kind"] == "unresolved_call"
+                    ]
+                )
+
+    def test_try_return_requires_normal_completion_without_handler_boundaries(self):
+        path = self.write(
+            "import json\n"
+            "def parse(value):\n"
+            "    try:\n"
+            "        return json.loads(value)\n"
+            "    except json.JSONDecodeError:\n"
+            "        raise Problem('bad')\n"
+        )
+        card = inspect_function(path, "parse")
+        claim = next(
+            item for item in card["claims"] if item["kind"] == "return_dependency"
+        )
+        self.assertIn("return expression completes normally", claim["statement"]["text"])
+        linked = {
+            boundary["target"]["text"]
+            for boundary in card["boundaries"]
+            if boundary["id"] in claim["boundary_ids"]
+        }
+        self.assertIn("json.loads(...)", linked)
+        self.assertNotIn("Problem('bad')", linked)
+        self.assertNotIn("Problem(...)", linked)
+
+    def test_redundant_branch_conditions_are_reduced_before_rendering(self):
+        path = self.write(
+            "def choose(value):\n"
+            "    if value is True:\n"
+            "        result = 1\n"
+            "    elif value is False:\n"
+            "        result = 2\n"
+            "    elif isinstance(value, str):\n"
+            "        return value\n"
+            "    else:\n"
+            "        result = 3\n"
+            "    return result\n"
+        )
+        card = inspect_function(path, "choose")
+        claim = next(
+            item
+            for item in card["claims"]
+            if item["kind"] == "return_dependency"
+            and item["statement"]["return_expression"] == "value"
+        )
+        text = claim["statement"]["text"]
+        self.assertIn("value is not True", text)
+        self.assertIn("value is not False", text)
+        self.assertIn("isinstance(value, str) is truthy", text)
+        self.assertNotIn("value is True or", text)
 
     def test_late_guard_is_a_control_dependency_of_the_return(self):
         path = self.write("def f(amount):\n    total = amount\n    if amount <= 0:\n        raise ValueError()\n    result = total * 2\n    return result\n")

@@ -134,6 +134,24 @@ class EscapingExceptionTests(unittest.TestCase):
         )
         self.assertEqual(self.exceptions(bare)[0]["statement"]["text"], "Re-raises a caught exception of unknown type.")
 
+    def test_explicit_raise_names_the_handler_that_makes_it_reachable(self):
+        card = self.inspect(
+            "def target(value):\n"
+            "    try:\n"
+            "        decode(value)\n"
+            "    except ValueError:\n"
+            "        raise TypeError('bad value')\n"
+        )
+        claim = self.exceptions(card)[0]
+        self.assertEqual(
+            claim["statement"]["text"],
+            "Raises TypeError when the ValueError handler runs.",
+        )
+        self.assertEqual(
+            claim["statement"]["condition_source_text"],
+            "except ValueError",
+        )
+
     def test_finally_raise_is_reported_without_hiding_protected_raise(self):
         card = self.inspect(
             "def target(flag):\n"

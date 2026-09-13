@@ -219,6 +219,7 @@ class _EffectScanner(ast.NodeVisitor):
         self.parameters = parameters
         self.fresh_containers = fresh_containers
         self.effect_position_calls: set[int] = set()
+        self.raised_expression_calls: set[int] = set()
         self.conditional_boundaries: list[dict[str, Any]] = []
         self.result = EffectResult([], [], [])
 
@@ -350,15 +351,25 @@ class _EffectScanner(ast.NodeVisitor):
             self._limit_claim(claim)
             self.result.claims.append(claim)
         elif not modeled_exception:
-            effect_relevant = self._effect_relevant(node)
+            raised_expression = id(node) in self.raised_expression_calls
+            effect_relevant = self._effect_relevant(node) or raised_expression
             category = call_category(node)
-            reason = (
-                "Saga cannot determine whether this call mutates state or causes an external effect."
-                if effect_relevant
-                else "The callee is not in the effect registry and may affect behavior."
-            )
+            if raised_expression:
+                reason = (
+                    "Saga cannot determine whether constructing the raised value "
+                    "causes other effects."
+                )
+            elif effect_relevant:
+                reason = (
+                    "Saga cannot determine whether this call mutates state or "
+                    "causes an external effect."
+                )
+            else:
+                reason = (
+                    "The callee is not in the effect registry and may affect behavior."
+                )
             concerns = ["effects"] if effect_relevant else []
-            if category != "routine":
+            if category != "routine" and not raised_expression:
                 concerns.append("exceptions")
             boundary = _boundary(
                 self.path,
@@ -375,6 +386,15 @@ class _EffectScanner(ast.NodeVisitor):
             self.visit(argument)
         for keyword in node.keywords:
             self.visit(keyword.value)
+
+    def visit_Raise(self, node: ast.Raise) -> None:
+        """Keep constructor uncertainty out of the failure view's exception limits."""
+        if isinstance(node.exc, ast.Call):
+            self.raised_expression_calls.add(id(node.exc))
+        if node.exc is not None:
+            self.visit(node.exc)
+        if node.cause is not None:
+            self.visit(node.cause)
 
     def visit_Expr(self, node: ast.Expr) -> None:
         """Treat calls made for discarded results as potentially effect-relevant."""

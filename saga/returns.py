@@ -286,6 +286,113 @@ def _unresolved_write_boundary(path: str, target: ast.AST) -> dict[str, Any]:
 Fallthrough = bool | ast.expr
 
 
+def _literal(node: ast.expr) -> tuple[str, bool] | None:
+    """Return a structural Boolean atom and polarity for simple conditions."""
+    polarity = True
+    while isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        polarity = not polarity
+        node = node.operand
+    if isinstance(node, (ast.BoolOp, ast.Constant)):
+        return None
+    return ast.dump(node, include_attributes=False), polarity
+
+
+def _simplify_boolean(node: ast.expr, facts: dict[str, bool]) -> Fallthrough:
+    """Apply Boolean identities using path facts without interpreting operands."""
+    literal = _literal(node)
+    if literal is not None and literal[0] in facts:
+        return facts[literal[0]] is literal[1]
+    if isinstance(node, ast.Constant) and isinstance(node.value, bool):
+        return node.value
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        value = _simplify_boolean(node.operand, facts)
+        return not value if isinstance(value, bool) else _not_fallthrough(value)
+    if not isinstance(node, ast.BoolOp):
+        return node
+
+    is_and = isinstance(node.op, ast.And)
+    values: list[ast.expr] = []
+    for child in node.values:
+        value = _simplify_boolean(child, facts)
+        if isinstance(value, bool):
+            if is_and and not value:
+                return False
+            if not is_and and value:
+                return True
+            continue
+        if isinstance(value, ast.BoolOp) and isinstance(value.op, type(node.op)):
+            values.extend(value.values)
+        else:
+            values.append(value)
+
+    unique: list[ast.expr] = []
+    seen: dict[str, bool] = {}
+    for value in values:
+        item = _literal(value)
+        if item is not None:
+            key, polarity = item
+            if key in seen and seen[key] is not polarity:
+                return not is_and
+            seen[key] = polarity
+        if not any(_same_condition(value, previous) for previous in unique):
+            unique.append(value)
+    if not unique:
+        return is_and
+    if len(unique) == 1:
+        return unique[0]
+    result = ast.BoolOp(op=type(node.op)(), values=unique)
+    ast.copy_location(result, node)
+    ast.fix_missing_locations(result)
+    return result
+
+
+def _simplify_path_conditions(
+    entries: list[tuple[ast.expr, dict[str, Any]]],
+) -> list[tuple[ast.expr, dict[str, Any]]]:
+    """Use sibling path facts to remove mechanically redundant Boolean clauses."""
+    current = entries
+    for _ in range(len(entries) + 1):
+        facts: dict[str, bool] = {}
+        conflicts: set[str] = set()
+        for expression, _ in current:
+            item = _literal(expression)
+            if item is None:
+                continue
+            key, polarity = item
+            if key in facts and facts[key] is not polarity:
+                conflicts.add(key)
+                facts.pop(key)
+            elif key not in conflicts:
+                facts[key] = polarity
+        changed = False
+        revised: list[tuple[ast.expr, dict[str, Any]]] = []
+        for expression, metadata in current:
+            own = _literal(expression)
+            usable = dict(facts)
+            if own is not None:
+                usable.pop(own[0], None)
+            simplified = _simplify_boolean(expression, usable)
+            if simplified is True:
+                changed = True
+                continue
+            if simplified is False:
+                revised.append((expression, metadata))
+                continue
+            pieces = (
+                simplified.values
+                if isinstance(simplified, ast.BoolOp) and isinstance(simplified.op, ast.And)
+                else [simplified]
+            )
+            changed = changed or len(pieces) != 1 or not _same_condition(expression, pieces[0])
+            for piece in pieces:
+                if not any(_same_condition(piece, previous) for previous, _ in revised):
+                    revised.append((piece, metadata))
+        current = revised
+        if not changed:
+            break
+    return current
+
+
 def _same_condition(left: ast.expr, right: ast.expr) -> bool:
     """Compare generated conditions without depending on source locations."""
     return ast.dump(left, include_attributes=False) == ast.dump(
@@ -512,10 +619,20 @@ class _CFGBuilder:
                 return current, else_exits
             return current, {current}
         if isinstance(statement, ast.Try):
+            normal_label = "try:normal"
+            self.control_descriptions[(current, normal_label)] = {
+                "text": (
+                    "execution reaches this return through the try body and its "
+                    "return expression completes normally"
+                ),
+                "source_text": "try body and return expression complete normally",
+                "source_span": _span(self.path, statement).as_dict(),
+                "compound": False,
+            }
             before_region = set(self.nodes)
             body_first, body_exits = self.block(
                 statement.body,
-                [*controls, (current, None)],
+                [*controls, (current, normal_label)],
             )
             if body_first is not None:
                 self.edge(current, body_first)
@@ -525,7 +642,7 @@ class _CFGBuilder:
             if statement.orelse:
                 else_first, else_exits = self.block(
                     statement.orelse,
-                    [*controls, (current, None)],
+                    [*controls, (current, normal_label)],
                 )
                 if else_first is not None:
                     for exit_node in body_exits:
@@ -624,6 +741,42 @@ def _contains(outer: dict[str, Any], inner: dict[str, Any]) -> bool:
     return start <= inner_start and inner_end <= end
 
 
+def _executed_roots(statement: ast.stmt) -> list[ast.AST]:
+    """Return syntax executed by this CFG node, excluding child statement suites."""
+    if isinstance(statement, (ast.If, ast.Assert, ast.While)):
+        return [statement.test]
+    if isinstance(statement, (ast.For, ast.AsyncFor)):
+        return [statement.target, statement.iter]
+    if isinstance(statement, (ast.With, ast.AsyncWith)):
+        return [item.context_expr for item in statement.items]
+    if isinstance(statement, ast.Try):
+        return []
+    if isinstance(statement, ast.Match):
+        return [statement.subject]
+    return [statement]
+
+
+def _boundary_owned_by_statement(
+    path: str,
+    statement: ast.stmt,
+    boundary_span: dict[str, Any],
+) -> bool:
+    """Keep a compound CFG node from claiming boundaries in sibling branches."""
+    statement_span = _span(path, statement).as_dict()
+    if (
+        statement_span["start_line"],
+        statement_span["start_column"],
+    ) == (
+        boundary_span["start_line"],
+        boundary_span["start_column"],
+    ):
+        return True
+    return any(
+        _contains(_span(path, root).as_dict(), boundary_span)
+        for root in _executed_roots(statement)
+    )
+
+
 def _call_details(path: str, node: ast.AST) -> list[dict[str, Any]]:
     """Describe calls in a statement without pretending to resolve their bodies."""
     calls = []
@@ -693,8 +846,11 @@ def _opaque_call_boundary_ids(
     reachable = builder.ancestors(return_node.node_id) | {return_node.node_id}
     calls: dict[tuple[tuple[str, Any], ...], tuple[ast.Call, set[int]]] = {}
     for node_id in reachable:
-        for item in _walk_current_scope(builder.nodes[node_id].statement):
-            if isinstance(item, ast.Call):
+        statement = builder.nodes[node_id].statement
+        for root in _executed_roots(statement):
+            for item in _walk_current_scope(root):
+                if not isinstance(item, ast.Call):
+                    continue
                 key = tuple(sorted(_span(path, item).as_dict().items()))
                 call, owners = calls.setdefault(key, (item, set()))
                 owners.add(node_id)
@@ -754,11 +910,18 @@ def _claim(path: str, return_node: CFGNode, included: set[int], builder: _CFGBui
             # Opaque calls are attached below using exact AST ownership and
             # slice-name overlap. A coarse statement span alone is not enough.
             continue
-        if any(_contains(span, boundary["source_span"]) for span in source_spans):
+        if any(
+            _boundary_owned_by_statement(
+                path,
+                builder.nodes[item].statement,
+                boundary["source_span"],
+            )
+            for item in ordered
+        ):
             boundary_ids.append(boundary["id"])
     inputs = sorted(reads & parameter_names)
     path_conditions = []
-    compound_conditions: list[bool] = []
+    expression_conditions: list[tuple[ast.expr, dict[str, Any]]] = []
     path_assumptions: list[dict[str, str]] = []
     seen_conditions: set[tuple[int, bool | str]] = set()
     for control_id, expected in return_node.controls:
@@ -778,27 +941,44 @@ def _claim(path: str, return_node: CFGNode, included: set[int], builder: _CFGBui
                 "expected": True,
                 "source_text": detail["source_text"],
                 "source_span": detail["source_span"],
+                "compound": detail["compound"],
             })
-            compound_conditions.append(detail["compound"])
             continue
         if not isinstance(control, (ast.If, ast.Assert)):
             continue
         test = builder.gate_conditions.get(control_id, control.test)
-        path_conditions.append({
-            "text": describe_condition(test, expected),
-            "expected": expected,
-            "source_text": source_expression(test),
-            "source_span": _span(path, test).as_dict(),
-        })
-        compound_conditions.append(condition_is_compound(test))
+        required = test if expected else _not_fallthrough(test)
+        expression_conditions.append(
+            (
+                required,
+                {
+                    "source_span": _span(path, test).as_dict(),
+                    "assertion": isinstance(control, ast.Assert),
+                    "source_text": source_expression(test),
+                    "expected": expected,
+                    "required": ast.dump(required, include_attributes=False),
+                },
+            )
+        )
         if isinstance(control, ast.Assert):
             path_assumptions.append({"text": "This return path assumes __debug__ is true; Python may remove the assertion under optimization."})
         if any(isinstance(item, ast.Compare) for item in ast.walk(test)):
             path_assumptions.append({"text": "Comparison path wording follows the modeled Python semantics; overloaded comparisons are not resolved."})
+    for expression, metadata in _simplify_path_conditions(expression_conditions):
+        unchanged = ast.dump(expression, include_attributes=False) == metadata["required"]
+        path_conditions.append(
+            {
+                "text": describe_condition(expression, True),
+                "expected": metadata["expected"] if unchanged else True,
+                "source_text": metadata["source_text"] if unchanged else source_expression(expression),
+                "source_span": metadata["source_span"],
+                "compound": condition_is_compound(expression),
+            }
+        )
     returned = source_expression(return_node.statement.value)
     rendered_conditions = [
-        f"({item['text']})" if len(path_conditions) > 1 and compound else item["text"]
-        for item, compound in zip(path_conditions, compound_conditions)
+        f"({item['text']})" if len(path_conditions) > 1 and item.get("compound") else item["text"]
+        for item in path_conditions
     ]
     path_suffix = " when " + " and ".join(rendered_conditions) if rendered_conditions else ""
     implicit = bool(getattr(return_node.statement, "_saga_implicit", False))

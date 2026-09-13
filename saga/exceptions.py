@@ -155,6 +155,18 @@ def _claim(
     handler_types: tuple[str, ...] | None,
 ) -> dict[str, Any]:
     """Build an explicit-exception claim without upgrading syntactic evidence."""
+    claim_conditions = conditions
+    if handler is not None and node.exc is not None:
+        handler_name = source_expression(handler.type) if handler.type else "bare except"
+        claim_conditions = (
+            {
+                "text": f"the {handler_name} handler runs",
+                "source_text": f"except {handler_name}",
+                "source_span": _span(path, handler).as_dict(),
+                "compound": False,
+            },
+            *conditions,
+        )
     if node.exc is None:
         if handler is None:
             text = "A bare raise may escape with an unresolved exception type."
@@ -170,15 +182,15 @@ def _claim(
         text = f"Raises {exception['name']}."
     else:
         text = f"An exception may escape from raising {exception['expression']}; its type is unresolved."
-    if conditions:
+    if claim_conditions:
         rendered = [
             f"({item['text']})" if item.get("compound") else item["text"]
-            for item in conditions
+            for item in claim_conditions
         ]
         text = text[:-1] + " when " + " and ".join(rendered) + "."
-    spans = [item["source_span"] for item in conditions]
+    spans = [item["source_span"] for item in claim_conditions]
     spans.append(_span(path, node).as_dict())
-    if handler is not None:
+    if handler is not None and node.exc is None:
         spans.insert(0, _span(path, handler).as_dict())
     return {
         "id": f"exception-{node.lineno}-{node.col_offset}",
@@ -188,8 +200,8 @@ def _claim(
             "type": "explicit_exception",
             "source_text": source_expression(node),
             "condition": None,
-            "condition_source_text": " and ".join(item["source_text"] for item in conditions),
-            "path_conditions": list(conditions),
+            "condition_source_text": " and ".join(item["source_text"] for item in claim_conditions),
+            "path_conditions": list(claim_conditions),
             "exception": exception,
             "handler_spans": [_span(path, handler).as_dict()] if handler is not None else [],
         },

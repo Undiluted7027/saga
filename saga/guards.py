@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import builtins
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -12,11 +13,9 @@ from .presentation import describe_condition, source_expression
 
 
 BUILTIN_EXCEPTIONS = {
-    "ArithmeticError", "AssertionError", "AttributeError", "EOFError", "Exception",
-    "FileExistsError", "FileNotFoundError", "ImportError", "IndexError", "KeyError",
-    "LookupError", "MemoryError", "NameError", "OSError", "OverflowError", "RuntimeError",
-    "StopIteration", "SyntaxError", "SystemError", "TypeError", "UnboundLocalError",
-    "UnicodeError", "ValueError", "ZeroDivisionError",
+    name
+    for name, value in vars(builtins).items()
+    if isinstance(value, type) and issubclass(value, BaseException)
 }
 
 

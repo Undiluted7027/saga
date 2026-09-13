@@ -14,7 +14,7 @@ DYNAMIC_KINDS = {"dynamic_dispatch", "assignment_hooks"}
 EXCEPTION_KINDS = {"exception_dispatch", "exception_matching"}
 ROUTINE_BUILTINS = {
     "abs", "all", "any", "bool", "dict", "enumerate", "float", "int",
-    "isinstance", "len", "list", "max", "min", "range", "round", "set",
+    "isinstance", "len", "list", "max", "min", "next", "range", "round", "set",
     "sorted", "str", "sum", "tuple", "zip",
 }
 ROUTINE_METHODS = {
@@ -23,15 +23,21 @@ ROUTINE_METHODS = {
     "encode",
     "end",
     "endswith",
+    "find",
     "finditer",
     "fullmatch",
     "get",
+    "groupdict",
     "groups",
+    "isascii",
+    "isprintable",
     "items",
     "join",
     "keys",
     "lower",
     "lstrip",
+    "match",
+    "partition",
     "replace",
     "rstrip",
     "rsplit",
