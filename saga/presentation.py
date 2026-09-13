@@ -18,6 +18,19 @@ _COMPARISONS: dict[type[ast.cmpop], str] = {
     ast.NotIn: "is not in",
 }
 
+_NEGATED_COMPARISONS: dict[type[ast.cmpop], str] = {
+    ast.Eq: "does not equal",
+    ast.NotEq: "equals",
+    ast.Lt: "is greater than or equal to",
+    ast.LtE: "is greater than",
+    ast.Gt: "is less than or equal to",
+    ast.GtE: "is less than",
+    ast.Is: "is not",
+    ast.IsNot: "is",
+    ast.In: "is not in",
+    ast.NotIn: "is in",
+}
+
 
 def source_expression(node: ast.AST | None) -> str:
     """Return stable source-shaped text for an expression in the evidence."""
@@ -51,9 +64,8 @@ def describe_condition(node: ast.AST, expected: bool = True) -> str:
         return joiner.join(rendered)
 
     if isinstance(node, ast.Compare) and len(node.ops) == 1 and len(node.comparators) == 1:
-        if not expected:
-            return f"{source_expression(node)} is false"
-        operator = _COMPARISONS[type(node.ops[0])]
+        operators = _COMPARISONS if expected else _NEGATED_COMPARISONS
+        operator = operators[type(node.ops[0])]
         return f"{source_expression(node.left)} {operator} {source_expression(node.comparators[0])}"
 
     if isinstance(node, ast.Constant) and isinstance(node.value, bool):

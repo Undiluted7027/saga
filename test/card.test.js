@@ -249,6 +249,21 @@ test('editor mutation view retains effect-relevant boundaries without inventing 
   assert.equal(viewPresentation(focused).empty, false);
 });
 
+test('editor mutation view puts potentially shared writes before local construction', () => {
+  const card = loadCard();
+  const shared = structuredClone(card.claims.find((claim) => claim.kind === 'attempted_write'));
+  shared.id = 'shared-write';
+  shared.statement.write_scope = 'potentially_aliased';
+  const local = structuredClone(shared);
+  local.id = 'local-write';
+  local.statement.write_scope = 'local_container';
+
+  const focused = focusCard({ ...card, claims: [local, shared] }, 'mutation');
+
+  assert.deepEqual(focused.claims.map((claim) => claim.id), ['shared-write', 'local-write']);
+  assert.equal(focusedAnswer(focused, focused.claims).headline, '1 recorded write site across 1 target and 1 local-container write site.');
+});
+
 test('focused editor views preserve test observation status', () => {
   const card = loadCard();
   card.observation_status = {

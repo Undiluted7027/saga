@@ -150,11 +150,15 @@ function focusedAnswer(card, claims) {
   if (view === 'mutation') {
     const direct = claims.filter((claim) => !claim.call_chain?.length);
     const propagated = claims.filter((claim) => claim.call_chain?.length);
-    const writes = direct.filter((claim) => claim.kind === 'attempted_write');
+    const allWrites = direct.filter((claim) => claim.kind === 'attempted_write');
+    const localWrites = allWrites.filter((claim) => claim.statement.write_scope === 'local_container');
+    const writes = allWrites.filter((claim) => claim.statement.write_scope !== 'local_container');
     const effects = direct.filter((claim) => claim.kind === 'known_effect');
-    const propagatedWrites = propagated.filter((claim) => claim.kind === 'attempted_write');
+    const allPropagatedWrites = propagated.filter((claim) => claim.kind === 'attempted_write');
+    const propagatedLocalWrites = allPropagatedWrites.filter((claim) => claim.statement.write_scope === 'local_container');
+    const propagatedWrites = allPropagatedWrites.filter((claim) => claim.statement.write_scope !== 'local_container');
     const propagatedEffects = propagated.filter((claim) => claim.kind === 'known_effect');
-    if (!writes.length && !effects.length && !propagatedWrites.length && !propagatedEffects.length) {
+    if (!allWrites.length && !effects.length && !allPropagatedWrites.length && !propagatedEffects.length) {
       return card.boundaries.length ? {
         headline: 'No supported write sites or registered effect sites.',
         detail: 'Effect-relevant unresolved calls are listed as limits, not treated as effects.'
@@ -164,10 +168,13 @@ function focusedAnswer(card, claims) {
     const parts = [];
     if (writes.length) parts.push(`${writes.length} recorded ${writes.length === 1 ? 'write site' : 'write sites'} across ${targets.size} ${targets.size === 1 ? 'target' : 'targets'}`);
     if (effects.length) parts.push(`${effects.length} registered external ${effects.length === 1 ? 'effect site' : 'effect sites'}`);
+    if (localWrites.length) parts.push(`${localWrites.length} local-container ${localWrites.length === 1 ? 'write site' : 'write sites'}`);
     if (propagatedWrites.length) parts.push(`${propagatedWrites.length} ${propagatedWrites.length === 1 ? 'write site' : 'write sites'} inside local calls`);
+    if (propagatedLocalWrites.length) parts.push(`${propagatedLocalWrites.length} local-container ${propagatedLocalWrites.length === 1 ? 'write site' : 'write sites'} inside local calls`);
     if (propagatedEffects.length) parts.push(`${propagatedEffects.length} registered external ${propagatedEffects.length === 1 ? 'effect site' : 'effect sites'} inside local calls`);
     const joined = parts.join(' and ');
     let detail = 'Unresolved calls remain separate because Saga cannot classify their effects.';
+    if (localWrites.length) detail += ' Local-container writes build values allocated inside this function; they are separate from potentially aliased targets.';
     return { headline: `${joined[0].toUpperCase()}${joined.slice(1)}.`, detail };
   }
   if (view === 'failure' && claims.length) {
@@ -302,6 +309,15 @@ function focusCard(card, view = 'full') {
   const allowed = VIEW_CLAIMS[view];
   if (!allowed) throw new Error(`Unknown Saga view: ${view}`);
   const claims = card.claims.filter((claim) => allowed.has(claim.kind));
+  if (view === 'mutation') {
+    // Keep local construction visible without letting it bury writes whose
+    // target may be shared with the caller or other code.
+    claims.sort((left, right) => {
+      const leftLocal = left.kind === 'attempted_write' && left.statement?.write_scope === 'local_container';
+      const rightLocal = right.kind === 'attempted_write' && right.statement?.write_scope === 'local_container';
+      return Number(leftLocal) - Number(rightLocal);
+    });
+  }
   const relatedIds = new Set(claims.flatMap((claim) => claim.boundary_ids));
   const boundaries = view === 'boundary'
     ? [...card.boundaries]

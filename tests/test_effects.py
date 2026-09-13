@@ -359,6 +359,44 @@ class WhileEffectTests(unittest.TestCase):
             )
         )
 
+    def test_locally_created_container_writes_are_distinguished(self):
+        path = self.write(
+            "def build(payload):\n"
+            "    options = {}\n"
+            "    options['mode'] = 'safe'\n"
+            "    payload['seen'] = True\n"
+            "    return options\n"
+        )
+        card = inspect_function(path, "build")
+        writes = {
+            claim["statement"]["source_text"]: claim
+            for claim in card["claims"]
+            if claim["kind"] == "attempted_write"
+        }
+        self.assertEqual(
+            writes["options['mode']"]["statement"]["write_scope"],
+            "local_container",
+        )
+        self.assertEqual(
+            writes["payload['seen']"]["statement"]["write_scope"],
+            "potentially_aliased",
+        )
+        assignment_targets = {
+            boundary["target"]["text"]
+            for boundary in card["boundaries"]
+            if boundary["kind"] == "assignment_hooks"
+        }
+        self.assertNotIn("options['mode']", assignment_targets)
+        self.assertIn("payload['seen']", assignment_targets)
+
+        focused = focus_card(card, "mutation")
+        focused_targets = [
+            claim["statement"].get("source_text")
+            for claim in focused["claims"]
+            if claim["kind"] == "attempted_write"
+        ]
+        self.assertEqual(focused_targets, ["payload['seen']", "options['mode']"])
+
 
 if __name__ == "__main__":
     unittest.main()

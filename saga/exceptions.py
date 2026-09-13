@@ -9,7 +9,7 @@ from typing import Any
 
 from .guards import BUILTIN_EXCEPTIONS
 from .inspect import _diagnostic, _span
-from .presentation import describe_condition, source_expression
+from .presentation import condition_is_compound, describe_condition, source_expression
 
 
 @dataclass
@@ -171,7 +171,11 @@ def _claim(
     else:
         text = f"An exception may escape from raising {exception['expression']}; its type is unresolved."
     if conditions:
-        text = text[:-1] + " when " + " and ".join(item["text"] for item in conditions) + "."
+        rendered = [
+            f"({item['text']})" if item.get("compound") else item["text"]
+            for item in conditions
+        ]
+        text = text[:-1] + " when " + " and ".join(rendered) + "."
     spans = [item["source_span"] for item in conditions]
     spans.append(_span(path, node).as_dict())
     if handler is not None:
@@ -211,9 +215,13 @@ def _assertion_claim(
     requirement = describe_condition(node.test)
     text = f"May raise AssertionError unless {requirement}."
     if conditions:
+        rendered = [
+            f"({item['text']})" if item.get("compound") else item["text"]
+            for item in conditions
+        ]
         text = (
             "When "
-            + " and ".join(item["text"] for item in conditions)
+            + " and ".join(rendered)
             + f", may raise AssertionError unless {requirement}."
         )
     return {
@@ -268,6 +276,7 @@ def _condition(path: str, node: ast.AST, truth: bool) -> dict[str, Any]:
         "text": description if truth else f"not ({description})",
         "source_text": source if truth else f"not ({source})",
         "source_span": _span(path, node).as_dict(),
+        "compound": condition_is_compound(node),
     }
 
 

@@ -70,6 +70,13 @@ def focus_card(card: dict[str, Any], view: ViewName) -> dict[str, Any]:
     allowed = VIEW_CLAIMS[view]
     assert allowed is not None
     claims = [claim for claim in card["claims"] if claim["kind"] in allowed]
+    if view == "mutation":
+        # Local construction is still evidence, but it should not bury writes to
+        # arguments, globals, or objects whose ownership Saga cannot establish.
+        claims.sort(
+            key=lambda claim: claim["kind"] == "attempted_write"
+            and claim["statement"].get("write_scope") == "local_container"
+        )
     if view == "boundary":
         boundaries = list(card["boundaries"])
     else:

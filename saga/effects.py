@@ -119,6 +119,89 @@ def _target(target: ast.AST) -> dict[str, Any] | None:
     return None
 
 
+_FRESH_CONTAINER_VALUES = (
+    ast.Dict,
+    ast.List,
+    ast.Set,
+    ast.DictComp,
+    ast.ListComp,
+    ast.SetComp,
+)
+
+
+class _FreshContainerCollector(ast.NodeVisitor):
+    """Find names whose only local binding creates a builtin container."""
+
+    def __init__(self) -> None:
+        self.bindings: dict[str, list[bool]] = {}
+
+    def _bind(self, target: ast.AST, fresh: bool = False) -> None:
+        for item in ast.walk(target):
+            if isinstance(item, ast.Name) and isinstance(item.ctx, ast.Store):
+                self.bindings.setdefault(item.id, []).append(
+                    fresh and item is target
+                )
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        fresh = isinstance(node.value, _FRESH_CONTAINER_VALUES)
+        for target in node.targets:
+            self._bind(target, fresh)
+        self.visit(node.value)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        self._bind(
+            node.target,
+            node.value is not None and isinstance(node.value, _FRESH_CONTAINER_VALUES),
+        )
+        if node.value:
+            self.visit(node.value)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        self._bind(node.target)
+        self.visit(node.value)
+
+    def visit_For(self, node: ast.For) -> None:
+        self._bind(node.target)
+        self.generic_visit(node)
+
+    visit_AsyncFor = visit_For
+
+    def visit_With(self, node: ast.With) -> None:
+        for item in node.items:
+            if item.optional_vars:
+                self._bind(item.optional_vars)
+        self.generic_visit(node)
+
+    visit_AsyncWith = visit_With
+
+    def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+        self._bind(node.target, isinstance(node.value, _FRESH_CONTAINER_VALUES))
+        self.visit(node.value)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        return
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        return
+
+    def fresh_names(self) -> set[str]:
+        return {
+            name
+            for name, bindings in self.bindings.items()
+            if bindings == [True]
+        }
+
+
+def _fresh_container_names(node: ast.FunctionDef) -> set[str]:
+    """Return un-rebound local names initialized by container syntax."""
+    collector = _FreshContainerCollector()
+    for statement in node.body:
+        collector.visit(statement)
+    return collector.fresh_names()
+
+
 class _EffectScanner(ast.NodeVisitor):
     """Walk one target body and record direct writes, known calls, and opaque calls."""
 
@@ -128,11 +211,13 @@ class _EffectScanner(ast.NodeVisitor):
         tree: ast.Module,
         globals_: set[str],
         parameters: set[str],
+        fresh_containers: set[str],
     ) -> None:
         self.path = path
         self.aliases = _aliases(tree)
         self.globals = globals_
         self.parameters = parameters
+        self.fresh_containers = fresh_containers
         self.effect_position_calls: set[int] = set()
         self.conditional_boundaries: list[dict[str, Any]] = []
         self.result = EffectResult([], [], [])
@@ -183,8 +268,28 @@ class _EffectScanner(ast.NodeVisitor):
         if isinstance(target, ast.Name) and target.id not in self.globals:
             return
         target_text = source_expression(target)
-        claim = _claim(self.path, target, {"type": "attempted_write", "target": structured, "source_text": target_text}, f"Attempts to write to {target_text}.")
-        if isinstance(target, (ast.Attribute, ast.Subscript)):
+        local_container = (
+            isinstance(target, ast.Subscript)
+            and isinstance(target.value, ast.Name)
+            and target.value.id in self.fresh_containers
+        )
+        write_scope = "local_container" if local_container else "potentially_aliased"
+        claim = _claim(
+            self.path,
+            target,
+            {
+                "type": "attempted_write",
+                "target": structured,
+                "source_text": target_text,
+                "write_scope": write_scope,
+            },
+            (
+                f"Writes to locally created container at {target_text}."
+                if local_container
+                else f"Attempts to write to {target_text}."
+            ),
+        )
+        if isinstance(target, (ast.Attribute, ast.Subscript)) and not local_container:
             boundary = _boundary(self.path, target, "assignment_hooks", ast.unparse(target), "The assignment may invoke a descriptor, __setattr__, or __setitem__ implementation.")
             self._limit_boundary(boundary)
             self.result.boundaries.append(boundary)
@@ -394,7 +499,13 @@ def analyze_effects(path: str, tree: ast.Module, node: ast.FunctionDef) -> Effec
         parameters.add(node.args.vararg.arg)
     if node.args.kwarg:
         parameters.add(node.args.kwarg.arg)
-    scanner = _EffectScanner(path, tree, globals_, parameters)
+    scanner = _EffectScanner(
+        path,
+        tree,
+        globals_,
+        parameters,
+        _fresh_container_names(node) - globals_ - parameters,
+    )
     for statement in node.body:
         scanner.visit(statement)
     return scanner.result

@@ -124,15 +124,35 @@ def focused_answer(
     if view == "mutation":
         direct = [claim for claim in claims if not claim.get("call_chain")]
         propagated = [claim for claim in claims if claim.get("call_chain")]
-        writes = [claim for claim in direct if claim["kind"] == "attempted_write"]
+        all_writes = [claim for claim in direct if claim["kind"] == "attempted_write"]
+        local_writes = [
+            claim
+            for claim in all_writes
+            if claim["statement"].get("write_scope") == "local_container"
+        ]
+        writes = [
+            claim
+            for claim in all_writes
+            if claim["statement"].get("write_scope") != "local_container"
+        ]
         effects = [claim for claim in direct if claim["kind"] == "known_effect"]
-        propagated_writes = [
+        all_propagated_writes = [
             claim for claim in propagated if claim["kind"] == "attempted_write"
+        ]
+        propagated_local_writes = [
+            claim
+            for claim in all_propagated_writes
+            if claim["statement"].get("write_scope") == "local_container"
+        ]
+        propagated_writes = [
+            claim
+            for claim in all_propagated_writes
+            if claim["statement"].get("write_scope") != "local_container"
         ]
         propagated_effects = [
             claim for claim in propagated if claim["kind"] == "known_effect"
         ]
-        if not writes and not effects and not propagated_writes and not propagated_effects:
+        if not all_writes and not effects and not all_propagated_writes and not propagated_effects:
             if card.get("boundaries"):
                 return {
                     "headline": "No supported write sites or registered effect sites.",
@@ -154,10 +174,21 @@ def focused_answer(
                 f"{len(effects)} registered external "
                 f"{'effect site' if len(effects) == 1 else 'effect sites'}"
             )
+        if local_writes:
+            parts.append(
+                f"{len(local_writes)} local-container "
+                f"{'write site' if len(local_writes) == 1 else 'write sites'}"
+            )
         if propagated_writes:
             parts.append(
                 f"{len(propagated_writes)} "
                 f"{'write site' if len(propagated_writes) == 1 else 'write sites'} "
+                "inside local calls"
+            )
+        if propagated_local_writes:
+            parts.append(
+                f"{len(propagated_local_writes)} local-container "
+                f"{'write site' if len(propagated_local_writes) == 1 else 'write sites'} "
                 "inside local calls"
             )
         if propagated_effects:
@@ -170,6 +201,11 @@ def focused_answer(
         detail = (
             "Unresolved calls remain separate because Saga cannot classify their effects."
         )
+        if local_writes:
+            detail += (
+                " Local-container writes build values allocated inside this function; "
+                "they are separate from potentially aliased targets."
+            )
         return {"headline": headline, "detail": detail}
 
     if view == "failure" and claims:

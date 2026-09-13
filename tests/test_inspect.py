@@ -152,7 +152,7 @@ class InspectFunctionTests(unittest.TestCase):
         guard = next(claim for claim in card["claims"] if claim["kind"] == "rejected_input")
         returned = next(claim for claim in card["claims"] if claim["kind"] == "return_dependency")
         self.assertEqual(guard["statement"]["text"], "Rejects input when items is falsy or amount is less than or equal to 0.")
-        self.assertEqual(returned["statement"]["text"], "Returns amount when items is truthy and amount <= 0 is false.")
+        self.assertEqual(returned["statement"]["text"], "Returns amount when items is truthy and amount is greater than 0.")
 
     def test_nested_boolean_wording_keeps_required_grouping(self):
         path = self.write("def check(a, b, c):\n    if not (a and b) and c:\n        raise ValueError()\n    return a\n")
@@ -307,6 +307,39 @@ class InspectFunctionTests(unittest.TestCase):
                 for item in card["diagnostics"]
             )
         )
+
+    def test_continue_guards_limit_a_later_return(self):
+        path = self.write(
+            "def choose(items, title):\n"
+            "    for item in items:\n"
+            "        if not item.enabled:\n"
+            "            continue\n"
+            "        if title:\n"
+            "            if item.title != title:\n"
+            "                continue\n"
+            "        return item\n"
+            "    return None\n"
+        )
+        card = inspect_function(path, "choose")
+        claim = next(
+            claim
+            for claim in card["claims"]
+            if claim["kind"] == "return_dependency"
+            and claim["statement"]["return_expression"] == "item"
+        )
+        conditions = {
+            item["source_text"] for item in claim["statement"]["path_conditions"]
+        }
+        self.assertIn("not item.enabled", conditions)
+        self.assertTrue(
+            any(
+                "item.title" in condition
+                and "title" in condition
+                for condition in conditions
+            )
+        )
+        self.assertIn("item.enabled is truthy", claim["statement"]["text"])
+        self.assertIn("item.title equals title", claim["statement"]["text"])
 
     def test_augmented_assignment_reads_the_previous_definition(self):
         path = self.write("def add_to_seed(y):\n    x = 1\n    x += y\n    return x\n")

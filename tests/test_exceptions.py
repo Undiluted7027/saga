@@ -32,6 +32,19 @@ class EscapingExceptionTests(unittest.TestCase):
         self.assertEqual(claim["evidence"]["method"], "explicit_raise_flow")
         self.assertEqual([span["start_line"] for span in claim["source_spans"]], [3, 4])
 
+    def test_compound_condition_is_parenthesized_before_outer_conjunction(self):
+        card = self.inspect(
+            "def target(left, right, failed):\n"
+            "    if left or right:\n"
+            "        if failed:\n"
+            "            raise RuntimeError('failed')\n"
+        )
+        claim = self.exceptions(card)[0]
+        self.assertEqual(
+            claim["statement"]["text"],
+            "Raises RuntimeError when (left is truthy or right is truthy) and failed is truthy.",
+        )
+
     def test_assert_after_state_change_reports_conditional_assertion_error(self):
         card = self.inspect(
             "def target(value):\n"

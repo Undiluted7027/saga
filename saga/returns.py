@@ -252,6 +252,11 @@ def _unsupported_diagnostics(path: str, statement: ast.stmt) -> list[dict[str, A
                         "Saga traverses this while statement, but does not determine "
                         "iteration counts or exact break and else behavior."
                     )
+                elif isinstance(item, ast.Continue):
+                    message = (
+                        "Saga uses this continue to constrain later returns in the same "
+                        "loop, but does not model exact loop transfer behavior."
+                    )
                 else:
                     message = f"{type(item).__name__} semantics are outside the Slice 4 return model."
                 diagnostics.append(_diagnostic("unsupported_semantics", message, _span(path, item), "returns"))
@@ -278,6 +283,65 @@ def _unresolved_write_boundary(path: str, target: ast.AST) -> dict[str, Any]:
     }
 
 
+Fallthrough = bool | ast.expr
+
+
+def _and_fallthrough(left: Fallthrough, right: Fallthrough) -> Fallthrough:
+    """Combine two requirements for reaching the next statement."""
+    if left is False or right is False:
+        return False
+    if left is True:
+        return right
+    if right is True:
+        return left
+    return ast.BoolOp(op=ast.And(), values=[left, right])
+
+
+def _or_fallthrough(left: Fallthrough, right: Fallthrough) -> Fallthrough:
+    """Combine alternative ways to reach the next statement."""
+    if left is True or right is True:
+        return True
+    if left is False:
+        return right
+    if right is False:
+        return left
+    return ast.BoolOp(op=ast.Or(), values=[left, right])
+
+
+def _not_fallthrough(value: ast.expr) -> ast.expr:
+    """Negate one source condition without evaluating it."""
+    if isinstance(value, ast.UnaryOp) and isinstance(value.op, ast.Not):
+        return value.operand
+    return ast.UnaryOp(op=ast.Not(), operand=value)
+
+
+def _suite_fallthrough(statements: list[ast.stmt]) -> Fallthrough:
+    """Describe when a small statement suite reaches its lexical successor."""
+    result: Fallthrough = True
+    for statement in statements:
+        result = _and_fallthrough(result, _statement_fallthrough(statement))
+        if result is False:
+            break
+    return result
+
+
+def _statement_fallthrough(statement: ast.stmt) -> Fallthrough:
+    """Model only lexical exits needed to preserve post-guard conditions."""
+    if isinstance(statement, (ast.Return, ast.Raise, ast.Continue, ast.Break)):
+        return False
+    if not isinstance(statement, ast.If):
+        return True
+    body = _suite_fallthrough(statement.body)
+    alternative = _suite_fallthrough(statement.orelse) if statement.orelse else True
+    when_true = _and_fallthrough(statement.test, body)
+    when_false = _and_fallthrough(_not_fallthrough(statement.test), alternative)
+    result = _or_fallthrough(when_true, when_false)
+    if isinstance(result, ast.expr):
+        ast.copy_location(result, statement.test)
+        ast.fix_missing_locations(result)
+    return result
+
+
 class _CFGBuilder:
     """Build statement nodes and conservative branch and loop edges."""
 
@@ -290,6 +354,7 @@ class _CFGBuilder:
         # limited by a write that can actually execute before it.
         self.write_boundaries: list[tuple[int, dict[str, Any]]] = []
         self.gates_next: dict[int, bool] = {}
+        self.gate_conditions: dict[int, ast.expr] = {}
 
     def node(self, statement: ast.stmt, controls: list[tuple[int, bool | None]]) -> int:
         """Create one CFG node with lexical reads, definitions, and controllers."""
@@ -336,6 +401,11 @@ class _CFGBuilder:
                 active_controls.append((entry, True))
             elif entry in self.gates_next:
                 active_controls.append((entry, self.gates_next[entry]))
+            elif isinstance(statement, ast.If):
+                fallthrough = _statement_fallthrough(statement)
+                if isinstance(fallthrough, ast.expr):
+                    self.gate_conditions[entry] = fallthrough
+                    active_controls.append((entry, True))
         return first, exits
 
     def statement(self, statement: ast.stmt, controls: list[tuple[int, bool | None]]) -> tuple[int, set[int]]:
@@ -452,7 +522,7 @@ class _CFGBuilder:
                 self.edge(current, body_first)
                 return current, body_exits
             return current, {current}
-        if isinstance(statement, (ast.Return, ast.Raise)):
+        if isinstance(statement, (ast.Return, ast.Raise, ast.Continue)):
             return current, set()
         return current, {current}
 
@@ -639,7 +709,7 @@ def _claim(path: str, return_node: CFGNode, included: set[int], builder: _CFGBui
         if key in seen_conditions:
             continue
         seen_conditions.add(key)
-        test = control.test
+        test = builder.gate_conditions.get(control_id, control.test)
         path_conditions.append({
             "text": describe_condition(test, expected),
             "expected": expected,

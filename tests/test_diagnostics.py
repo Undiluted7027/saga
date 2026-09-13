@@ -124,7 +124,7 @@ class DiagnosticGroupingTests(unittest.TestCase):
             card = inspect_function(str(path), "bill")
         continues = [
             diagnostic for diagnostic in card["diagnostics"]
-            if diagnostic["message"].startswith("Continue semantics")
+            if diagnostic["message"].startswith("Saga uses this continue")
         ]
         self.assertEqual(len(continues), 4)
         self.assertEqual(

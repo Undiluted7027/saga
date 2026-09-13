@@ -85,9 +85,10 @@ Syntax support is wider than semantic support. The POC follows these rules:
 
 - Local-name reads and writes use lexical scope within the target function.
 - `if` branches and `for` loops receive conservative control-flow edges. Loop analysis may over-approximate dependencies.
+- A return after a supported `continue` guard retains the condition needed to reach it. Unsupported loop exits remain explicit limits.
 - Guard conditions are preserved structurally. Operators are not assumed to have builtin behavior unless the claim records that assumption.
 - Calls are opaque unless a small, explicit registry or a bounded module-local summary provides relevant behavior. Construction of a modeled builtin exception in a `raise` statement is handled by the guard analysis.
-- Attribute and subscript assignments are reported as attempted write operations. They also produce a boundary for assignment-hook behavior unless Saga can establish modeled builtin semantics. They do not prove that ordinary mutation occurred because descriptors, `__setattr__`, and `__setitem__` may run arbitrary code.
+- Attribute and subscript assignments are reported as attempted write operations. Writes to a name bound to a fresh container literal are separated from potentially aliased targets; this classification does not prove whether a value later escapes. Potentially aliased assignments also produce a boundary for assignment-hook behavior because descriptors, `__setattr__`, and `__setitem__` may run arbitrary code.
 - An `assert`-based claim records the assumption that `__debug__` is true. Python may remove assertions when run with optimization.
 - Typing overload declarations are skipped when Saga can identify one concrete implementation. A decorator on that implementation limits every body-derived claim because the runtime wrapper remains unknown.
 - Saga traverses a `with` body, but marks its effects and returns with a context-manager boundary. It does not model entry, exit, or exception suppression.
