@@ -146,6 +146,13 @@ main { padding: 20px 0 56px; }
 .primary-action:hover { background: var(--vscode-button-hoverBackground); color: var(--vscode-button-foreground); }
 
 section + section { margin-top: 48px; }
+.answer-lead {
+  margin: 0 0 36px;
+  padding: .3rem 0 .3rem 1rem;
+  border-left: 3px solid var(--info);
+}
+.answer-lead h2 { margin: 0; font-size: 1.35rem; line-height: 1.3; }
+.answer-lead p { max-width: 68ch; margin: .4rem 0 0; color: var(--muted); }
 .section-heading {
   display: flex;
   align-items: end;
@@ -264,6 +271,25 @@ summary:hover { color: var(--vscode-textLink-activeForeground); }
   border: 1px solid var(--border);
   background: var(--raised);
 }
+.claim-cluster, .boundary-tier {
+  margin-top: 10px;
+  padding: 0 1rem;
+  border: 1px solid var(--border);
+}
+.claim-cluster > summary, .boundary-tier > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.claim-cluster > summary small, .boundary-tier > summary small {
+  display: block;
+  margin-top: .15rem;
+  color: var(--muted);
+  font-weight: 400;
+}
+.claim-cluster[open], .boundary-tier[open] { padding-bottom: 1rem; }
+.boundary-relevance { margin-bottom: .45rem; font-weight: 600; }
 .local-call-evidence > summary small, .overview-claim-group > summary small { display: block; margin-top: .15rem; color: var(--muted); font-weight: 400; }
 .overview-claim-group > summary {
   display: flex;
@@ -308,6 +334,6 @@ footer strong { color: var(--text); }
 
 @media (forced-colors: active) {
   .claim, .boundary-card, .diagnostic-card, .observation-card, .empty-state, .quiet-state,
-  .routine-boundaries, .local-call-evidence, .overview-claim-group, .metrics, .fact-grid, .source-link { border-color: CanvasText; }
+  .routine-boundaries, .local-call-evidence, .overview-claim-group, .claim-cluster, .boundary-tier, .metrics, .fact-grid, .source-link { border-color: CanvasText; }
   .tab.is-active { border-bottom-color: Highlight; }
 }

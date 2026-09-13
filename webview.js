@@ -1,9 +1,12 @@
 const {
   boundaryGroups,
+  claimGroups,
   claimPresentation,
   diagnosticGroups,
   localCallEvidence,
   observationPresentation,
+  focusedAnswer,
+  prioritizeBoundaryGroups,
   returnPathPresentation,
   viewPresentation
 } = require('./card');
@@ -114,16 +117,42 @@ function panelHtml(card, panel, styleUri = 'evidence-card.css') {
     return `<article class="claim claim--${safeClass(claim.kind)}">${pathHeading}<div class="claim-meta"><span>${escapeHtml(label.replaceAll('_', ' '))}</span><span class="evidence-badge evidence-badge--${safeClass(presentation.evidenceClass)}">${escapeHtml(presentation.evidenceClass)}</span></div><h3>${escapeHtml(presentation.summary)}</h3>${sourceExpression}${scope}${conditionSource}${handlers}${renderClaimFacts(claim.statement)}${condition}${dependencies}${localDependencies}${observation}${sources}${evidenceDetails}</article>`;
   }).join('');
 
+  const renderClaimGroups = (claims, returnPathOffset = 0) => {
+    let pathOffset = returnPathOffset;
+    return claimGroups(claims).map((group) => {
+      const rendered = renderClaims(group.claims, pathOffset);
+      pathOffset += group.claims.filter((claim) => claim.kind === 'return_dependency').length;
+      if (group.count === 1) return rendered;
+      const sourceCount = new Set(group.sourceSpans.map((span) => JSON.stringify(span))).size;
+      return `<details class="claim-cluster"><summary><span><strong>${escapeHtml(group.summary)}</strong><small>${plural(group.count, 'evidence record')} at ${plural(sourceCount, 'source site')}</small></span><span class="disclosure-label">Inspect records</span></summary>${rendered}</details>`;
+    }).join('');
+  };
+
   const renderBoundaryGroup = (group) => {
     const isCall = ['routine_call', 'module_local', 'external_or_unresolved_call'].includes(group.boundaryClass);
     const siteLabel = `${isCall ? 'call' : 'source'} ${group.count === 1 ? 'site' : 'sites'}`;
     const sites = group.occurrences.map((occurrence) => `<li>${sourceLink(occurrence.sourceSpan, `Line ${occurrence.sourceSpan.start_line}`)}${renderCallChain(occurrence.callChain)}</li>`).join('');
     const locations = group.count === 1 ? `<div class="source-row">${sourceLink(group.occurrences[0].sourceSpan, `Open ${siteLabel}`)}</div>` : `<details class="subdetail"><summary>${group.count} source locations</summary><ol class="evidence-list">${sites}</ol></details>`;
-    return `<article class="boundary-card"><div class="claim-meta"><span>${escapeHtml(group.boundaryClass.replaceAll('_', ' '))}</span><span class="count">${group.count} ${siteLabel}</span></div><h3><code>${escapeHtml(group.target)}</code></h3><p>${escapeHtml(group.reason)}</p>${group.claimKinds.length ? `<p class="detail-copy"><strong>Limits</strong> ${escapeHtml(group.claimKinds.join(', '))}</p>` : ''}${group.limitingBoundaryIds.length ? `<p class="detail-copy"><strong>Limited by</strong> ${escapeHtml(group.limitingBoundaryIds.join(', '))}</p>` : ''}${locations}</article>`;
+    const relevance = group.relevance ? `<p class="boundary-relevance">${escapeHtml(group.relevance)}</p>` : '';
+    return `<article class="boundary-card"><div class="claim-meta"><span>${escapeHtml(group.boundaryClass.replaceAll('_', ' '))}</span><span class="count">${group.count} ${siteLabel}</span></div><h3><code>${escapeHtml(group.target)}</code></h3>${relevance}<p>${escapeHtml(group.reason)}</p>${group.claimKinds.length ? `<p class="detail-copy"><strong>Limits</strong> ${escapeHtml(group.claimKinds.join(', '))}</p>` : ''}${group.limitingBoundaryIds.length ? `<p class="detail-copy"><strong>Limited by</strong> ${escapeHtml(group.limitingBoundaryIds.join(', '))}</p>` : ''}${locations}</article>`;
   };
 
-  const renderBoundaries = (boundaries) => {
+  const collapsedBoundaryTier = (label, groups, explanation) => {
+    if (!groups.length) return '';
+    const sites = groups.reduce((total, group) => total + group.count, 0);
+    return `<details class="boundary-tier"><summary><span><strong>${escapeHtml(label)}</strong><small>${escapeHtml(explanation)}</small></span><span class="count">${plural(groups.length, 'group')} · ${plural(sites, 'site')}</span></summary>${groups.map(renderBoundaryGroup).join('')}</details>`;
+  };
+
+  const renderBoundaries = (boundaries, claims = card.claims, focused = false) => {
     const groups = boundaryGroups({ ...card, boundaries });
+    if (focused) {
+      const tiers = prioritizeBoundaryGroups(groups, claims, view.name);
+      const primary = tiers.primary.map(renderBoundaryGroup).join('');
+      return primary
+        + collapsedBoundaryTier('Other direct limits', tiers.related, 'Relevant to this question, but not linked to a displayed claim.')
+        + collapsedBoundaryTier('Limits carried through local calls', tiers.propagated, 'Recorded inside one-hop module-local analysis.')
+        + collapsedBoundaryTier('Routine unresolved calls', tiers.routine, 'Retained without modeled semantics.');
+    }
     const important = groups.filter((group) => group.category !== 'routine');
     const routine = groups.filter((group) => group.category === 'routine');
     const routineSites = routine.reduce((total, group) => total + group.count, 0);
@@ -152,7 +181,7 @@ function panelHtml(card, panel, styleUri = 'evidence-card.css') {
     ['Failures', 'Which inputs are rejected, and which exceptions can escape?', derived.filter((claim) => ['rejected_input', 'explicit_exception'].includes(claim.kind))],
     ['Other facts', 'Supported evidence that does not fit a focused question.', derived.filter((claim) => !['return_dependency', 'attempted_write', 'known_effect', 'rejected_input', 'explicit_exception'].includes(claim.kind))]
   ].filter(([, , claims]) => claims.length);
-  const renderOverviewClaimGroups = () => overviewClaimGroups.map(([label, question, claims]) => `<details class="overview-claim-group"><summary><span><strong>${escapeHtml(label)}</strong><small>${escapeHtml(question)}</small></span><span class="count">${plural(claims.length, 'claim')}</span></summary>${renderClaims(claims)}</details>`).join('');
+  const renderOverviewClaimGroups = () => overviewClaimGroups.map(([label, question, claims]) => `<details class="overview-claim-group"><summary><span><strong>${escapeHtml(label)}</strong><small>${escapeHtml(question)}</small></span><span class="count">${plural(claims.length, 'claim')}</span></summary>${renderClaimGroups(claims)}</details>`).join('');
   const allBoundaryGroups = boundaryGroups(card);
   const diagnosticGroupCount = diagnosticGroups(card).length;
   const metrics = view.name === 'full'
@@ -160,7 +189,7 @@ function panelHtml(card, panel, styleUri = 'evidence-card.css') {
     : [['Claims in view', card.claims.length], ['Boundaries in view', allBoundaryGroups.length], ['Diagnostics in view', diagnosticGroupCount], ['Local calls', partition.groups.length]];
   const fullContent = [
     section('derived', 'Supported facts', 'What Saga derived', derived.length, renderOverviewClaimGroups(), 'No derived claims.'),
-    section('observed', 'Execution evidence', 'What tests observed', observed.length, renderClaims(observed) + observationSummary),
+    section('observed', 'Execution evidence', 'What tests observed', observed.length, renderClaimGroups(observed) + observationSummary),
     section('boundaries', 'Analysis limits', 'Where Saga stopped', allBoundaryGroups.length, renderBoundaries(card.boundaries), 'No recorded boundaries.'),
     section('diagnostics', 'Analyzer reports', 'What needs attention', diagnosticGroupCount, renderDiagnostics(card.diagnostics), 'No diagnostics.')
   ].join('');
@@ -174,7 +203,7 @@ function panelHtml(card, panel, styleUri = 'evidence-card.css') {
     const groupedBoundaries = boundaryGroups({ ...card, boundaries: group.boundaries });
     const groupedDiagnostics = diagnosticGroups({ diagnostics: group.diagnostics });
     const counts = [plural(group.claims.length, 'claim'), plural(groupedBoundaries.length, 'boundary group'), plural(groupedDiagnostics.length, 'diagnostic group')].join(' · ');
-    const claims = group.claims.length ? `<h3 class="inside-heading">Claims</h3>${renderClaims(group.claims, localReturnOffset)}` : '';
+    const claims = group.claims.length ? `<h3 class="inside-heading">Claims</h3>${renderClaimGroups(group.claims, localReturnOffset)}` : '';
     localReturnOffset += group.claims.filter((claim) => claim.kind === 'return_dependency').length;
     const boundaries = group.boundaries.length ? `<h3 class="inside-heading">Boundaries</h3>${renderBoundaries(group.boundaries)}` : '';
     const diagnostics = group.diagnostics.length ? `<h3 class="inside-heading">Diagnostics</h3>${renderDiagnostics(group.diagnostics)}` : '';
@@ -183,14 +212,16 @@ function panelHtml(card, panel, styleUri = 'evidence-card.css') {
   }).join('');
 
   const empty = view.empty ? `<div class="empty-state" role="note"><strong>No supported evidence in this view.</strong><p>${escapeHtml(view.emptyMessage)}</p></div>` : '';
-  const focusedClaims = view.name === 'boundary' ? '' : section('answer', 'Direct evidence', view.label, directClaims.length, empty || renderClaims(directClaims));
+  const answer = focusedAnswer(card, card.claims);
+  const answerLead = answer ? `<section class="answer-lead" aria-labelledby="direct-answer-title"><span class="eyebrow">Direct answer</span><h2 id="direct-answer-title">${escapeHtml(answer.headline)}</h2><p>${escapeHtml(answer.detail)}</p></section>` : '';
+  const focusedClaims = view.name === 'boundary' ? '' : section('answer', 'Supporting claims', view.label, directClaims.length, empty || renderClaimGroups(directClaims));
   const directBoundaryCount = boundaryGroups({ ...card, boundaries: directBoundaries }).length;
-  const focusedBoundaries = section('related-boundaries', view.name === 'boundary' ? 'Direct evidence' : 'Limits on this answer', view.name === 'boundary' ? 'Analysis boundaries' : 'Related boundaries', directBoundaryCount, view.name === 'boundary' && empty ? empty : renderBoundaries(directBoundaries), 'No recorded boundary limits this direct evidence.');
+  const focusedBoundaries = section('related-boundaries', view.name === 'boundary' ? 'Direct evidence' : 'Limits on this answer', view.name === 'boundary' ? 'Analysis boundaries' : 'Related boundaries', directBoundaryCount, view.name === 'boundary' && empty ? empty : renderBoundaries(directBoundaries, card.claims, true), 'No recorded boundary limits this direct evidence.');
   const focusedDiagnostics = directDiagnostics.length ? section('target-diagnostics', 'Analyzer reports', 'Related diagnostics', diagnosticGroups({ diagnostics: directDiagnostics }).length, renderDiagnostics(directDiagnostics)) : '';
   const propagated = localCallGroups ? section('local-calls', 'One-hop analysis', 'Evidence inside local calls', partition.groups.length, localCallGroups) : '';
   const hiddenDiagnostics = view.hiddenDiagnosticMessage ? `<p class="diagnostic-pointer">${escapeHtml(view.hiddenDiagnosticMessage)}</p>` : '';
   const focusedObservations = observationStatus ? section('test-status', 'Execution evidence', 'Test observation status', undefined, observationSummary) : '';
-  const focusedContent = focusedClaims + focusedBoundaries + focusedObservations + focusedDiagnostics + propagated + hiddenDiagnostics;
+  const focusedContent = answerLead + focusedClaims + focusedBoundaries + focusedObservations + focusedDiagnostics + propagated + hiddenDiagnostics;
 
   const navItems = [['full', 'Overview'], ['return', 'Returns'], ['mutation', 'Writes & effects'], ['failure', 'Failures'], ['boundary', 'Limits']];
   const navigation = navItems.map(([name, label]) => commandLink(

@@ -69,7 +69,7 @@ function validateCard(card) {
 function claimPresentation(claim) {
   /** Expose card wording and its evidence without inventing editor-only meaning. */
   return {
-    summary: claim.statement.text,
+    summary: readableClaimSummary(claim),
     sourceText: claim.statement.source_text,
     conditionSourceText: claim.statement.condition_source_text,
     evidenceClass: claim.evidence.evidence_class,
@@ -84,6 +84,162 @@ function claimPresentation(claim) {
     handlerSpans: claim.statement.handler_spans || [],
     callChain: claim.call_chain || [],
   };
+}
+
+function readableClaimSummary(claim) {
+  /** Shorten analyzer-shaped write wording without changing its modality. */
+  const text = claim.statement.text;
+  if (claim.kind !== 'attempted_write') return text;
+  if (text.startsWith('Attempts to write to ')) return `May write to ${text.slice('Attempts to write to '.length)}`;
+  return text.replace(' may attempt to write to ', ' may write to ');
+}
+
+function firstCallSiteKey(claim) {
+  const link = claim.call_chain?.[0];
+  if (!link) return [];
+  const span = link.call_site;
+  return [link.caller, link.callee, link.invoked_as || link.callee, span.path, span.start_line, span.start_column];
+}
+
+function claimGroupKey(claim) {
+  const statement = claim.statement;
+  const callSite = firstCallSiteKey(claim);
+  if (claim.kind === 'attempted_write') return [claim.kind, statement.source_text || statement.text, callSite];
+  if (claim.kind === 'known_effect') return [claim.kind, statement.effect?.kind, statement.effect?.callee, statement.source_text, callSite];
+  if (['rejected_input', 'explicit_exception'].includes(claim.kind)) {
+    return [claim.kind, statement.text, statement.condition_source_text, statement.source_text, callSite];
+  }
+  return [claim.kind, claim.id];
+}
+
+function claimGroups(claims) {
+  /** Group repeatable claim records while retaining every original object. */
+  const groups = [];
+  const byKey = new Map();
+  for (const claim of claims) {
+    const key = JSON.stringify(claimGroupKey(claim));
+    let group = byKey.get(key);
+    if (!group) {
+      group = { key, kind: claim.kind, summary: readableClaimSummary(claim), claims: [], claimIds: [], sourceSpans: [], boundaryIds: [] };
+      byKey.set(key, group);
+      groups.push(group);
+    }
+    group.claims.push(claim);
+    group.claimIds.push(claim.id);
+    group.sourceSpans.push(...claim.source_spans);
+    group.boundaryIds = [...new Set([...group.boundaryIds, ...(claim.boundary_ids || [])])].sort();
+  }
+  for (const group of groups) group.count = group.claims.length;
+  return groups;
+}
+
+function focusedAnswer(card, claims) {
+  /** Summarize only counts and relationships already present in a focused card. */
+  const view = card.view || 'full';
+  if (view === 'return' && claims.length) {
+    const direct = claims.filter((claim) => !claim.call_chain?.length);
+    const propagatedCount = claims.length - direct.length;
+    const inputs = [...new Set(direct.flatMap((claim) => claim.statement.inputs || []))].sort();
+    let detail = inputs.length ? `Recorded caller result dependencies include ${inputs.join(', ')}.` : 'Open a path to inspect its recorded values, calls, and limits.';
+    if (propagatedCount) detail += ` ${propagatedCount} more return ${propagatedCount === 1 ? 'path is' : 'paths are'} kept inside local-call evidence.`;
+    return {
+      headline: `${direct.length} return ${direct.length === 1 ? 'path' : 'paths'} in the selected function.`,
+      detail
+    };
+  }
+  if (view === 'mutation') {
+    const direct = claims.filter((claim) => !claim.call_chain?.length);
+    const propagatedCount = claims.length - direct.length;
+    const writes = direct.filter((claim) => claim.kind === 'attempted_write');
+    const effects = direct.filter((claim) => claim.kind === 'known_effect');
+    if (!writes.length && !effects.length) {
+      return card.boundaries.length ? {
+        headline: 'No supported writes or registered effects.',
+        detail: 'Effect-relevant unresolved calls are listed as limits, not treated as effects.'
+      } : undefined;
+    }
+    const targets = new Set(writes.map((claim) => claim.statement.source_text || claim.statement.text));
+    const parts = [];
+    if (writes.length) parts.push(`${writes.length} possible ${writes.length === 1 ? 'write' : 'writes'} across ${targets.size} ${targets.size === 1 ? 'target' : 'targets'}`);
+    if (effects.length) parts.push(`${effects.length} registered external ${effects.length === 1 ? 'effect' : 'effects'}`);
+    const joined = parts.join(' and ');
+    let detail = 'Unresolved calls remain separate because Saga cannot classify their effects.';
+    if (propagatedCount) detail += ` ${propagatedCount} more ${propagatedCount === 1 ? 'claim is' : 'claims are'} kept inside local-call evidence.`;
+    return { headline: `${joined[0].toUpperCase()}${joined.slice(1)}.`, detail };
+  }
+  if (view === 'failure' && claims.length) {
+    const direct = claims.filter((claim) => !claim.call_chain?.length);
+    const rejected = direct.filter((claim) => claim.kind === 'rejected_input').length;
+    const escaping = direct.filter((claim) => claim.kind === 'explicit_exception').length;
+    const parts = [];
+    if (rejected) parts.push(`${rejected} rejected-input ${rejected === 1 ? 'case' : 'cases'}`);
+    if (escaping) parts.push(`${escaping} explicit ${escaping === 1 ? 'exception' : 'exceptions'}`);
+    const joined = parts.join(' and ');
+    return { headline: `${joined[0].toUpperCase()}${joined.slice(1)}.`, detail: 'Conditions and handler evidence remain attached to each result.' };
+  }
+  if (view === 'boundary' && card.boundaries.length) {
+    const count = new Set(card.boundaries.map((item) => JSON.stringify([item.kind, item.target.text, item.reason]))).size;
+    return { headline: `${count} analysis ${count === 1 ? 'limit' : 'limits'}.`, detail: 'Direct caller limits appear before evidence carried through local calls and routine unresolved calls.' };
+  }
+  return undefined;
+}
+
+const ANSWER_LABELS = {
+  return_dependency: 'return answer',
+  attempted_write: 'writes and effects answer',
+  known_effect: 'writes and effects answer',
+  rejected_input: 'failure answer',
+  explicit_exception: 'failure answer'
+};
+
+function prioritizeBoundaryGroups(groups, claims, view) {
+  /** Order limits using explicit evidence links and call scope only. */
+  const claimsByBoundary = new Map();
+  for (const claim of claims) {
+    for (const id of claim.boundary_ids || []) {
+      if (!claimsByBoundary.has(id)) claimsByBoundary.set(id, []);
+      claimsByBoundary.get(id).push(claim);
+    }
+  }
+  const tiers = { primary: [], related: [], propagated: [], routine: [] };
+  for (const group of groups) {
+    const linked = [];
+    const seen = new Set();
+    for (const id of group.boundaryIds) {
+      for (const claim of claimsByBoundary.get(id) || []) {
+        if (!seen.has(claim.id)) {
+          linked.push(claim);
+          seen.add(claim.id);
+        }
+      }
+    }
+    const presented = {
+      ...group,
+      limitedClaimIds: linked.map((claim) => claim.id),
+      limitedClaimKinds: [...new Set(linked.map((claim) => claim.kind))].sort()
+    };
+    const propagated = group.occurrences.some((occurrence) => occurrence.callChain?.length);
+    if (group.category === 'routine') {
+      presented.priority = 'routine';
+      presented.relevance = 'Retained as an unresolved routine call without modeled semantics.';
+    } else if (propagated) {
+      presented.priority = 'propagated';
+      presented.relevance = 'Comes from evidence inside a module-local call.';
+    } else if (linked.length || view === 'boundary') {
+      presented.priority = 'primary';
+      const labels = [...new Set(linked.map((claim) => ANSWER_LABELS[claim.kind] || 'displayed answer'))].sort();
+      presented.relevance = labels.length ? `Directly limits the ${labels.join(' and ')}.` : 'Stops analysis in the selected function.';
+    } else {
+      presented.priority = 'related';
+      presented.relevance = ({
+        return: 'May limit result dependencies that Saga could not resolve.',
+        mutation: 'May add effects that Saga could not classify.',
+        failure: 'May add failure behavior that Saga could not resolve.'
+      })[view] || 'Stops analysis outside the displayed claims.';
+    }
+    tiers[presented.priority].push(presented);
+  }
+  return tiers;
 }
 
 const RETURN_SITE_LIMIT = 8;
@@ -368,4 +524,4 @@ function hoverLines(card) {
   return lines;
 }
 
-module.exports = { loadCard, targetNameFromLine, validateCard, claimPresentation, returnPathPresentation, focusCard, localCallEvidence, viewPresentation, observationPresentation, boundaryGroups, diagnosticGroups, hoverLines };
+module.exports = { loadCard, targetNameFromLine, validateCard, claimPresentation, claimGroups, focusedAnswer, prioritizeBoundaryGroups, returnPathPresentation, focusCard, localCallEvidence, viewPresentation, observationPresentation, boundaryGroups, diagnosticGroups, hoverLines };

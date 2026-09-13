@@ -121,10 +121,10 @@ class LocalEvidenceRenderingTests(unittest.TestCase):
 
         compact = terminal(self.focused)
 
-        direct = compact.index("Attempts to write to state.local")
+        direct = compact.index("May write to state.local")
         grouped = compact.index("Local call helper(...)")
         self.assertLess(direct, grouped)
-        self.assertNotIn("helper(...) may attempt to write to state.remote", compact)
+        self.assertNotIn("helper(...) may write to state.remote", compact)
         self.assertIn("Evidence is collapsed", compact)
         self.assertIn("1 claims, 3 boundary groups, 1 diagnostic groups", compact)
         self.assertEqual(self.focused, before)
@@ -133,7 +133,7 @@ class LocalEvidenceRenderingTests(unittest.TestCase):
         expanded = terminal(self.focused, show_local_call_evidence=True)
         partition = partition_local_call_evidence(self.focused)
 
-        self.assertIn("helper(...) may attempt to write to state.remote", expanded)
+        self.assertIn("helper(...) may write to state.remote", expanded)
         self.assertIn("notify(...)", expanded)
         self.assertIn("state.remote", expanded)
         self.assertIn("While-loop analysis is outside", expanded)
@@ -157,7 +157,7 @@ class LocalEvidenceRenderingTests(unittest.TestCase):
     def test_full_card_keeps_existing_evidence_expanded(self):
         rendered = terminal(self.full)
 
-        self.assertIn("helper(...) may attempt to write to state.remote", rendered)
+        self.assertIn("helper(...) may write to state.remote", rendered)
         self.assertNotIn("Evidence is collapsed", rendered)
 
     def test_cli_flag_expands_local_call_evidence(self):
@@ -179,7 +179,7 @@ class LocalEvidenceRenderingTests(unittest.TestCase):
             check=True,
         )
 
-        self.assertIn("helper(...) may attempt to write to state.remote", result.stdout)
+        self.assertIn("helper(...) may write to state.remote", result.stdout)
         self.assertIn("notify(...)", result.stdout)
 
     def test_cli_grouping_flag_does_not_change_json(self):

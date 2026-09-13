@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { loadCard, targetNameFromLine, validateCard, claimPresentation, returnPathPresentation, focusCard, localCallEvidence, viewPresentation, observationPresentation, boundaryGroups, diagnosticGroups, hoverLines } = require('../card');
+const { loadCard, targetNameFromLine, validateCard, claimPresentation, claimGroups, focusedAnswer, prioritizeBoundaryGroups, returnPathPresentation, focusCard, localCallEvidence, viewPresentation, observationPresentation, boundaryGroups, diagnosticGroups, hoverLines } = require('../card');
 
 test('fixture validates against the evidence-card contract', () => {
   const card = loadCard();
@@ -44,6 +44,43 @@ test('editor claim presentation keeps wording and supporting evidence together',
   assert.equal(view.evidenceClass, 'derived');
   assert.equal(view.method, 'entry_guard');
   assert.deepEqual(view.sourceSpans, claim.source_spans);
+});
+
+test('editor groups repeated write records without losing evidence', () => {
+  const card = loadCard();
+  const write = card.claims.find((item) => item.kind === 'attempted_write');
+  const repeated = structuredClone(write);
+  repeated.id = 'second-write';
+  repeated.source_spans[0].start_line += 1;
+  const claims = [write, repeated];
+  const before = structuredClone(claims);
+  const groups = claimGroups(claims);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].count, 2);
+  assert.deepEqual(groups[0].claimIds, [write.id, 'second-write']);
+  assert.deepEqual(groups[0].claims, claims);
+  assert.deepEqual(claims, before);
+});
+
+test('editor gives the focused answer before presentation detail', () => {
+  const card = focusCard(loadCard(), 'mutation');
+  const answer = focusedAnswer(card, card.claims);
+  assert.match(answer.headline, /possible write/);
+  assert.match(answer.detail, /Unresolved calls remain separate/);
+});
+
+test('editor ranks linked caller boundaries without dropping any group', () => {
+  const card = focusCard(loadCard(), 'mutation');
+  const groups = boundaryGroups(card);
+  const before = structuredClone(groups);
+  const tiers = prioritizeBoundaryGroups(groups, card.claims, 'mutation');
+  const linked = new Set(card.claims.flatMap((claim) => claim.boundary_ids));
+  for (const group of tiers.primary) {
+    assert.ok(group.boundaryIds.some((id) => linked.has(id)));
+    assert.match(group.relevance, /Directly limits/);
+  }
+  assert.equal(Object.values(tiers).flat().length, groups.length);
+  assert.deepEqual(groups, before);
 });
 
 test('editor claim presentation preserves a local call chain', () => {

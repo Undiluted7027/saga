@@ -5,6 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 from .boundaries import group_boundaries
+from .card_presentation import (
+    focused_answer,
+    group_claims,
+    prioritize_boundary_groups,
+    readable_claim_summary,
+)
 from .diagnostics import group_diagnostics
 from .local_evidence import partition_local_call_evidence
 from .return_evidence import return_path_presentation
@@ -70,6 +76,8 @@ def _boundary_group(
         f"{indent}{prefix} [{group['boundary_class']} · {group['kind']}] "
         f"{group['target']} — {group['count']} {site_label}{related}{limited_by}: {group['reason']}"
     )
+    if group.get("relevance"):
+        lines.append(f"{indent}  Why it matters: {group['relevance']}")
     if group["count"] > 1 and not show_sites:
         lines.append(f"{indent}  Re-run with --show-boundary-sites to list every source location.")
         return
@@ -174,6 +182,7 @@ def _claim_lines(
     indent: str = "  ",
     return_path_number: int | None = None,
     show_return_sites: bool = False,
+    show_evidence: bool = True,
 ) -> None:
     """Render one claim without changing or summarizing its evidence."""
     detail_indent = indent + "  "
@@ -186,8 +195,22 @@ def _claim_lines(
     label = statement.get("type", claim["kind"])
     lines.append(
         f"{indent}Claim [{label}; {claim['evidence']['evidence_class']}]: "
-        f"{statement['text']}"
+        f"{readable_claim_summary(claim)}"
     )
+    if not show_evidence:
+        if claim["boundary_ids"]:
+            lines.append(
+                f"{detail_indent}Limited by {len(claim['boundary_ids'])} recorded "
+                f"{'boundary' if len(claim['boundary_ids']) == 1 else 'boundaries'}."
+            )
+        if claim["source_spans"] and not compact_return:
+            span = claim["source_spans"][0]
+            lines.append(f"{detail_indent}Source: {span['path']}:{span['start_line']}")
+        lines.append(
+            f"{detail_indent}Evidence detail is collapsed; re-run with "
+            "--show-claim-evidence to expand it."
+        )
+        return
     if statement.get("source_text"):
         lines.append(f"{detail_indent}Source syntax: {statement['source_text']}")
     scope = statement.get("scope")
@@ -311,6 +334,7 @@ def terminal(
     show_diagnostic_sites: bool = False,
     show_local_call_evidence: bool = False,
     show_return_sites: bool = False,
+    show_claim_evidence: bool = False,
 ) -> str:
     """Render the structured card for concise terminal inspection."""
     target = card["target"]
@@ -339,6 +363,9 @@ def terminal(
         lines.insert(4, "  Full card: omit --view.")
         if view_is_empty(card):
             lines.insert(5, f"  {EMPTY_MESSAGES[view]}")
+        answer = focused_answer(card, card["claims"])
+        if answer:
+            lines.insert(5, f"  Answer: {answer['headline']} {answer['detail']}")
     rendered_card = (
         {
             **card,
@@ -350,18 +377,38 @@ def terminal(
         else card
     )
     return_path_number = 0
-    for claim in rendered_card["claims"]:
-        if view == "return" and claim["kind"] == "return_dependency":
-            return_path_number += 1
-        _claim_lines(
-            lines,
-            claim,
-            return_path_number=return_path_number or None,
-            show_return_sites=show_return_sites,
-        )
+    for claim_group in group_claims(rendered_card["claims"]):
+        if claim_group["count"] > 1 and not show_claim_evidence:
+            source_count = len({
+                (span["path"], span["start_line"], span["start_column"], span["end_line"], span["end_column"])
+                for span in claim_group["source_spans"]
+            })
+            lines.append(
+                f"  Evidence group: {claim_group['summary']} "
+                f"({claim_group['count']} records at {source_count} source sites)"
+            )
+            lines.append("    Re-run with --show-claim-evidence to inspect every record.")
+            continue
+        for claim in claim_group["claims"]:
+            if view == "return" and claim["kind"] == "return_dependency":
+                return_path_number += 1
+            _claim_lines(
+                lines,
+                claim,
+                return_path_number=return_path_number or None,
+                show_return_sites=show_return_sites,
+                show_evidence=view == "full" or show_claim_evidence or show_return_sites,
+            )
     groups = group_boundaries({**rendered_card, "claims": card["claims"]})
-    important_groups = [group for group in groups if group["category"] != "routine"]
-    routine_groups = [group for group in groups if group["category"] == "routine"]
+    if view != "full":
+        tiers = prioritize_boundary_groups(groups, card["claims"], view)
+        important_groups = tiers["primary"]
+        related_groups = tiers["related"]
+        routine_groups = tiers["routine"]
+    else:
+        important_groups = [group for group in groups if group["category"] != "routine"]
+        related_groups = []
+        routine_groups = [group for group in groups if group["category"] == "routine"]
     group_label = "group" if len(groups) == 1 else "groups"
     site_label = "site" if len(rendered_card["boundaries"]) == 1 else "sites"
     boundary_label = "Direct boundaries" if partition and partition["groups"] else "Boundaries"
@@ -371,6 +418,10 @@ def terminal(
     )
     for group in important_groups:
         _boundary_group(lines, group, show_sites=show_boundary_sites)
+    if related_groups:
+        lines.append(f"  Other direct limits: {len(related_groups)} groups")
+        for group in related_groups:
+            _boundary_group(lines, group, show_sites=show_boundary_sites, indent="    ")
     if routine_groups:
         routine_sites = sum(group["count"] for group in routine_groups)
         routine_group_label = "group" if len(routine_groups) == 1 else "groups"
@@ -484,6 +535,7 @@ def terminal(
                     indent="    ",
                     return_path_number=return_path_number or None,
                     show_return_sites=show_return_sites,
+                    show_evidence=show_claim_evidence or show_return_sites,
                 )
             for group in boundary_groups:
                 _boundary_group(

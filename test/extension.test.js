@@ -77,6 +77,8 @@ test('focused webview collapses propagated evidence beneath a native details gro
   const html = panelHtml(focused, { webview: { cspSource: 'vscode-webview://test' } }, 'vscode-webview://test/media/evidence-card.css');
 
   assert.match(html, /<details class="local-call-evidence">/);
+  assert.match(html, /1 possible write across 1 target/);
+  assert.match(html, /1 more claim is kept inside local-call evidence/);
   assert.match(html, /<code>helper\(\.\.\.\)<\/code><small>1 claim · 1 boundary group · 1 diagnostic group<\/small>/);
   assert.ok(html.indexOf('Attempts to write caller state.') < html.indexOf('Evidence inside local calls'));
   assert.ok(html.indexOf('Evidence inside local calls') < html.indexOf('helper(...) may attempt to write callee state.'));
@@ -115,6 +117,54 @@ test('focused metrics say that their counts belong to the current view', () => {
   assert.match(html, /<dt>Diagnostics in view<\/dt>/);
   assert.match(html, /<dt>Local calls<\/dt>/);
   assert.doesNotMatch(html, /<dt>Derived<\/dt>/);
+});
+
+test('focused webview puts the answer before claims and limits', () => {
+  const card = focusCard(loadCard(), 'mutation');
+  const html = panelHtml(card, { webview: { cspSource: 'vscode-webview://test' } }, 'style.css');
+
+  const answer = html.indexOf('Direct answer');
+  const claims = html.indexOf('Supporting claims');
+  const limits = html.indexOf('Limits on this answer');
+  assert.ok(answer >= 0);
+  assert.ok(answer < claims);
+  assert.ok(claims < limits);
+  assert.match(html, /Unresolved calls remain separate because Saga cannot classify their effects/);
+});
+
+test('focused webview groups repeated claims and retains every record', () => {
+  const card = loadCard();
+  const write = structuredClone(card.claims.find((claim) => claim.kind === 'attempted_write'));
+  const repeated = structuredClone(write);
+  repeated.id = 'repeat-write';
+  repeated.source_spans[0].start_line += 1;
+  const focused = focusCard({ ...card, claims: [write, repeated], boundaries: [], diagnostics: [] }, 'mutation');
+
+  const html = panelHtml(focused, { webview: { cspSource: 'vscode-webview://test' } }, 'style.css');
+
+  assert.match(html, /<details class="claim-cluster">/);
+  assert.match(html, /2 evidence records/);
+  assert.equal((html.match(/class="claim claim--attempted_write"/g) || []).length, 2);
+});
+
+test('focused webview renders a linked limit before other direct limits', () => {
+  const card = loadCard();
+  const write = structuredClone(card.claims.find((claim) => claim.kind === 'attempted_write'));
+  const linked = structuredClone(card.boundaries.find((item) => item.kind === 'unresolved_call'));
+  linked.id = 'linked-limit';
+  linked.target.text = 'gateway(...)';
+  linked.concerns = ['effects'];
+  const other = structuredClone(linked);
+  other.id = 'other-limit';
+  other.target.text = 'notify(...)';
+  write.boundary_ids = [linked.id];
+  const focused = focusCard({ ...card, claims: [write], boundaries: [other, linked], diagnostics: [] }, 'mutation');
+
+  const html = panelHtml(focused, { webview: { cspSource: 'vscode-webview://test' } }, 'style.css');
+
+  assert.ok(html.indexOf('gateway(...)') < html.indexOf('Other direct limits'));
+  assert.ok(html.indexOf('Other direct limits') < html.indexOf('notify(...)'));
+  assert.match(html, /Directly limits the writes and effects answer/);
 });
 
 test('webview escapes analyzed source and uses an external theme-aware stylesheet', () => {

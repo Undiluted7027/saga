@@ -46,6 +46,12 @@ Focused views keep evidence from module-local callees collapsed beneath each
 call site. Use `--show-local-call-evidence` to expand it in the terminal; the
 editor exposes the same detail through expandable local-call groups.
 
+Focused cards put a short answer before evidence detail. Repeated write, effect,
+and failure records are grouped without removing their source spans or boundary
+links. Use `--show-claim-evidence` to expand claim provenance and every grouped
+record in terminal output. Limits linked to the displayed answer appear before
+other direct limits, one-hop limits, and routine unresolved calls.
+
 Return paths with more than eight dependency sites are grouped by the kind of
 evidence already recorded on the claim. Use `--show-return-sites` to list every
 site in terminal output; the editor expands the same entries under the return
