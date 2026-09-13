@@ -66,13 +66,15 @@ def _definition_names(node: ast.AST) -> set[str]:
         targets = list(node.targets) if isinstance(node, ast.Assign) else [node.target]
     elif isinstance(node, (ast.For, ast.AsyncFor)):
         targets = [node.target]
+    elif isinstance(node, (ast.With, ast.AsyncWith)):
+        targets = [item.optional_vars for item in node.items if item.optional_vars]
     names: set[str] = set()
     for target in targets:
         names.update(item.id for item in ast.walk(target) if isinstance(item, ast.Name) and isinstance(item.ctx, (ast.Store, ast.Del)))
     return names
 
 
-_OPAQUE_WEAK_CONTAINERS = (ast.With, ast.AsyncWith, ast.Try, ast.TryStar, ast.While, ast.Match)
+_OPAQUE_WEAK_CONTAINERS = (ast.Try, ast.TryStar, ast.While, ast.Match)
 
 
 def _write_root(node: ast.AST) -> str | None:
@@ -146,7 +148,14 @@ def _weak_definition_names(node: ast.stmt) -> set[str]:
             elif isinstance(item, ast.MatchAs) and item.name:
                 names.add(item.name)
         return names
-    return _mutating_call_roots(node) | _assignment_write_roots(node)
+    names = _mutating_call_roots(node) | _assignment_write_roots(node)
+    if isinstance(node, (ast.With, ast.AsyncWith)):
+        for item in node.items:
+            if item.optional_vars is not None:
+                root = _write_root(item.optional_vars)
+                if root is not None and not isinstance(item.optional_vars, ast.Name):
+                    names.add(root)
+    return names
 
 
 def _node_reads(node: ast.stmt) -> set[str]:
@@ -155,6 +164,8 @@ def _node_reads(node: ast.stmt) -> set[str]:
         return _read_names(node.test)
     if isinstance(node, (ast.For, ast.AsyncFor)):
         return _read_names(node.iter)
+    if isinstance(node, (ast.With, ast.AsyncWith)):
+        return set().union(*(_read_names(item.context_expr) for item in node.items))
     reads = _read_names(node)
     if isinstance(node, ast.Assign):
         for target in node.targets:
@@ -222,7 +233,13 @@ def _unsupported_diagnostics(path: str, statement: ast.stmt) -> list[dict[str, A
         if isinstance(item, unsupported):
             key = (type(item).__name__, item.lineno, item.col_offset)
             if key not in seen:
-                diagnostics.append(_diagnostic("unsupported_semantics", f"{type(item).__name__} semantics are outside the Slice 4 return model.", _span(path, item), "returns"))
+                message = (
+                    "Saga traverses this context-manager body, but does not model "
+                    "__enter__, __exit__, or exception suppression."
+                    if isinstance(item, (ast.With, ast.AsyncWith))
+                    else f"{type(item).__name__} semantics are outside the Slice 4 return model."
+                )
+                diagnostics.append(_diagnostic("unsupported_semantics", message, _span(path, item), "returns"))
                 seen.add(key)
     return diagnostics
 
@@ -338,6 +355,15 @@ class _CFGBuilder:
                     self.edge(exit_node, else_first)
                 return current, else_exits
             return current, {current}
+        if isinstance(statement, (ast.With, ast.AsyncWith)):
+            body_first, body_exits = self.block(
+                statement.body,
+                [*controls, (current, None)],
+            )
+            if body_first is not None:
+                self.edge(current, body_first)
+                return current, body_exits
+            return current, {current}
         if isinstance(statement, (ast.Return, ast.Raise)):
             return current, set()
         return current, {current}
@@ -383,12 +409,18 @@ def _contains(outer: dict[str, Any], inner: dict[str, Any]) -> bool:
 def _call_details(path: str, node: ast.AST) -> list[dict[str, Any]]:
     """Describe calls in a statement without pretending to resolve their bodies."""
     calls = []
-    for call in ast.walk(node):
-        if not isinstance(call, ast.Call):
-            continue
-        if isinstance(call.func, ast.Name) and call.func.id in BUILTIN_EXCEPTIONS:
-            continue
-        calls.append({"text": f"{ast.unparse(call.func)}(...)", "source_span": _span(path, call).as_dict()})
+    roots: list[ast.AST]
+    if isinstance(node, (ast.With, ast.AsyncWith)):
+        roots = [item.context_expr for item in node.items]
+    else:
+        roots = [node]
+    for root in roots:
+        for call in ast.walk(root):
+            if not isinstance(call, ast.Call):
+                continue
+            if isinstance(call.func, ast.Name) and call.func.id in BUILTIN_EXCEPTIONS:
+                continue
+            calls.append({"text": f"{ast.unparse(call.func)}(...)", "source_span": _span(path, call).as_dict()})
     return calls
 
 

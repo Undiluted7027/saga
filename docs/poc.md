@@ -61,7 +61,7 @@ They do not include:
 - Source-file mutation or generated docstrings.
 - General symbolic execution or whole-program verification.
 - Arbitrary Python versions.
-- Async functions, generators, nested functions, decorated target functions, or runtime-generated code.
+- Async functions, generators, nested functions, or runtime-generated code.
 - Recursive, whole-program, or package-wide interprocedural analysis.
 - Complete type inference.
 - Concept assignment or rationale inference.
@@ -77,7 +77,7 @@ The POC analyzes Python 3.12 module-level synchronous functions. The target func
 
 - Local, attribute, subscript, and global assignments, including annotated and augmented assignments, plus `global` declarations.
 - Expression statements containing calls.
-- `if`/`else`, `assert`, `raise`, `return`, and `for` statements.
+- `if`/`else`, `assert`, `raise`, `return`, `for`, and `with` statements.
 - Names, constants, attribute and subscript access, calls, boolean operations, comparisons, and unary and binary operations within those statements.
 - A function docstring and `pass`, which produce no behavioral claims.
 
@@ -89,6 +89,8 @@ Syntax support is wider than semantic support. The POC follows these rules:
 - Calls are opaque unless a small, explicit registry or a bounded module-local summary provides relevant behavior. Construction of a modeled builtin exception in a `raise` statement is handled by the guard analysis.
 - Attribute and subscript assignments are reported as attempted write operations. They also produce a boundary for assignment-hook behavior unless Saga can establish modeled builtin semantics. They do not prove that ordinary mutation occurred because descriptors, `__setattr__`, and `__setitem__` may run arbitrary code.
 - An `assert`-based claim records the assumption that `__debug__` is true. Python may remove assertions when run with optimization.
+- Typing overload declarations are skipped when Saga can identify one concrete implementation. A decorator on that implementation limits every body-derived claim because the runtime wrapper remains unknown.
+- Saga traverses a `with` body, but marks its effects and returns with a context-manager boundary. It does not model entry, exit, or exception suppression.
 
 Any other statement or expression produces a diagnostic and suppresses claims that would depend on semantics Saga does not model. An unresolved call or dynamic operation produces a boundary attached to the affected analysis.
 

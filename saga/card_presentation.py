@@ -129,7 +129,7 @@ def focused_answer(
         if not writes and not effects:
             if card.get("boundaries"):
                 return {
-                    "headline": "No supported writes or registered effects.",
+                    "headline": "No supported write sites or registered effect sites.",
                     "detail": "Effect-relevant unresolved calls are listed as limits, not treated as effects.",
                 }
             return None
@@ -140,13 +140,13 @@ def focused_answer(
         parts = []
         if writes:
             parts.append(
-                f"{len(writes)} possible {'write' if len(writes) == 1 else 'writes'} "
+                f"{len(writes)} recorded {'write site' if len(writes) == 1 else 'write sites'} "
                 f"across {len(targets)} {'target' if len(targets) == 1 else 'targets'}"
             )
         if effects:
             parts.append(
                 f"{len(effects)} registered external "
-                f"{'effect' if len(effects) == 1 else 'effects'}"
+                f"{'effect site' if len(effects) == 1 else 'effect sites'}"
             )
         headline = " and ".join(parts).capitalize() + "."
         detail = (

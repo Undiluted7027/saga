@@ -6,7 +6,7 @@ import ast
 from dataclasses import dataclass
 from typing import Literal
 
-from .inspect import _span
+from .inspect import _select_concrete_function, _span
 
 ResolutionStatus = Literal[
     "resolved",
@@ -143,14 +143,18 @@ def _module_bindings(tree: ast.Module) -> dict[str, list[ast.AST]]:
 
 
 def _unique_function(
+    tree: ast.Module,
     bindings: dict[str, list[ast.AST]],
     name: str,
 ) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
-    """Resolve a name only when its sole module binding is a function."""
+    """Resolve one function, excluding proven typing overload declarations."""
     candidates = bindings.get(name, [])
-    if len(candidates) != 1 or not isinstance(candidates[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
+    if not all(
+        isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+        for item in candidates
+    ):
         return None
-    return candidates[0]
+    return _select_concrete_function(tree, candidates)
 
 
 def _module_aliases(
@@ -167,13 +171,14 @@ def _module_aliases(
             continue
         if len(bindings.get(target.id, [])) != 1:
             continue
-        callee = _unique_function(bindings, statement.value.id)
+        callee = _unique_function(tree, bindings, statement.value.id)
         if callee is not None and callee.lineno < statement.lineno:
             aliases[target.id] = callee
     return aliases
 
 
 def _local_aliases(
+    tree: ast.Module,
     node: ast.FunctionDef,
     scope: _FunctionScope,
     module_bindings: dict[str, list[ast.AST]],
@@ -188,7 +193,7 @@ def _local_aliases(
             continue
         if len(scope.bindings.get(target.id, [])) != 1 or statement.value.id in scope.bindings:
             continue
-        callee = _unique_function(module_bindings, statement.value.id)
+        callee = _unique_function(tree, module_bindings, statement.value.id)
         if callee is not None:
             aliases[target.id] = (callee, statement)
     return aliases
@@ -196,7 +201,7 @@ def _local_aliases(
 
 def _supported_callee(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """Match the target subset accepted by the current function inspector."""
-    if isinstance(node, ast.AsyncFunctionDef) or node.decorator_list:
+    if isinstance(node, ast.AsyncFunctionDef):
         return False
     return not any(isinstance(item, (ast.Yield, ast.YieldFrom)) for item in ast.walk(node))
 
@@ -219,7 +224,7 @@ def resolve_local_calls(
         scope.bind(caller.args.kwarg.arg, caller.args.kwarg)
     for statement in caller.body:
         scope.visit(statement)
-    local_aliases = _local_aliases(caller, scope, module_bindings)
+    local_aliases = _local_aliases(tree, caller, scope, module_bindings)
     parameter_names = {
         argument.arg
         for argument in [
@@ -262,7 +267,7 @@ def resolve_local_calls(
             callee = alias[0]
             via_alias = True
         else:
-            callee = _unique_function(module_bindings, name)
+            callee = _unique_function(tree, module_bindings, name)
             if callee is None and name in module_aliases:
                 callee = module_aliases[name]
                 via_alias = True

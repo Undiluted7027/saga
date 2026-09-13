@@ -148,6 +148,25 @@ class LocalCallTests(unittest.TestCase):
         )
         self.assertTrue(any(item["kind"] == "ambiguous_local_callee" for item in conditional_rebind["boundaries"]))
 
+    def test_local_call_uses_concrete_overload_implementation(self):
+        card = self.inspect(
+            "from typing import overload\n\n"
+            "@overload\n"
+            "def helper(value: str) -> str: ...\n\n"
+            "@overload\n"
+            "def helper(value: int) -> int: ...\n\n"
+            "def helper(value):\n"
+            "    return value\n\n"
+            "def caller(value):\n"
+            "    return helper(value)\n"
+        )
+        propagated = self.propagated(card, "return_dependency")
+        self.assertEqual(len(propagated), 1)
+        self.assertEqual(propagated[0]["call_chain"][0]["callee"], "helper")
+        self.assertFalse(
+            any(item["kind"] == "ambiguous_local_callee" for item in card["boundaries"])
+        )
+
     def test_module_and_straight_line_local_aliases_resolve(self):
         module_alias = self.inspect(
             "def helper(value):\n"

@@ -77,6 +77,45 @@ class TryEffectTests(unittest.TestCase):
         mutation = focus_card(card, "mutation")
         self.assertIn(conditional_id, {boundary["id"] for boundary in mutation["boundaries"]})
 
+    def test_with_body_effects_are_reported_under_a_context_manager_limit(self):
+        path = self.write(
+            "from pathlib import Path\n\n"
+            "def update(manager, state, path, notify):\n"
+            "    with manager:\n"
+            "        state.ready = True\n"
+            "        Path(path).write_text('ready')\n"
+            "        notify(state)\n"
+            "    return state\n"
+        )
+        card = inspect_function(path, "update")
+        boundary = next(
+            item
+            for item in card["boundaries"]
+            if item["kind"] == "unsupported_semantics"
+            and item["target"]["text"] == "with statement"
+        )
+        claims = [
+            item
+            for item in card["claims"]
+            if item["kind"] in {"attempted_write", "known_effect"}
+        ]
+        self.assertEqual(
+            {item["statement"].get("source_text") for item in claims},
+            {"state.ready", "Path(path).write_text('ready')"},
+        )
+        self.assertTrue(all(boundary["id"] in item["boundary_ids"] for item in claims))
+        self.assertTrue(
+            any(
+                item["target"]["text"] == "notify(...)"
+                and boundary["id"] in item.get("boundary_ids", [])
+                for item in card["boundaries"]
+            )
+        )
+        return_claim = next(
+            item for item in card["claims"] if item["kind"] == "return_dependency"
+        )
+        self.assertIn(boundary["id"], return_claim["boundary_ids"])
+
     def test_nested_try_effect_keeps_outer_and_inner_limits(self):
         path = self.write(
             "def update(state):\n"

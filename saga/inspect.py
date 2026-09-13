@@ -93,6 +93,70 @@ def _is_generator(node: ast.FunctionDef) -> bool:
     return any(isinstance(item, (ast.Yield, ast.YieldFrom)) for item in ast.walk(node))
 
 
+def _overload_decorators(tree: ast.Module) -> tuple[set[str], set[str]]:
+    """Return imported names that can syntactically identify typing overloads."""
+    names: set[str] = set()
+    modules: set[str] = set()
+    for statement in tree.body:
+        if isinstance(statement, ast.ImportFrom) and statement.module in {
+            "typing",
+            "typing_extensions",
+        }:
+            names.update(
+                item.asname or item.name
+                for item in statement.names
+                if item.name == "overload"
+            )
+        elif isinstance(statement, ast.Import):
+            modules.update(
+                item.asname or item.name
+                for item in statement.names
+                if item.name in {"typing", "typing_extensions"}
+            )
+    return names, modules
+
+
+def _is_overload_declaration(tree: ast.Module, node: ast.AST) -> bool:
+    """Recognize only overload decorators proven to come from typing modules."""
+    names, modules = _overload_decorators(tree)
+    for decorator in getattr(node, "decorator_list", []):
+        if isinstance(decorator, ast.Name) and decorator.id in names:
+            return True
+        if (
+            isinstance(decorator, ast.Attribute)
+            and decorator.attr == "overload"
+            and isinstance(decorator.value, ast.Name)
+            and decorator.value.id in modules
+        ):
+            return True
+    return False
+
+
+def _select_concrete_function(
+    tree: ast.Module,
+    matches: list[ast.FunctionDef | ast.AsyncFunctionDef],
+) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    """Select one implementation after excluding proven overload declarations."""
+    concrete = [node for node in matches if not _is_overload_declaration(tree, node)]
+    return concrete[0] if len(concrete) == 1 else None
+
+
+def _decorator_boundary(path: str, decorator: ast.expr) -> dict[str, Any]:
+    """Limit body-derived claims when a decorator may replace the callable."""
+    source_text = ast.unparse(decorator)
+    return {
+        "id": f"inspection-boundary-{decorator.lineno}-{decorator.col_offset}-decorator",
+        "kind": "unsupported_semantics",
+        "target": {"text": "@" + source_text},
+        "reason": (
+            "Saga analyzes the function body, but this decorator may replace or wrap "
+            "the callable and change its returns, failures, or effects at runtime."
+        ),
+        "category": "important",
+        "source_span": _span(path, decorator).as_dict(),
+    }
+
+
 def _base_card(path: str, qualified_name: str) -> dict[str, Any]:
     """Create an empty, schema-shaped card for a target under inspection."""
     return {
@@ -137,17 +201,15 @@ def inspect_function(file_path: str, qualified_name: str) -> dict[str, Any]:
     if not matches:
         card["diagnostics"].append(_diagnostic("target_not_found", f"No module-level function named '{qualified_name}' was found in {file_path}."))
         return card
-    if len(matches) > 1:
+    node = _select_concrete_function(tree, matches)
+    if node is None:
         card["diagnostics"].append(_diagnostic("ambiguous_target", f"Selector '{qualified_name}' matches {len(matches)} module-level functions."))
         return card
 
-    node = matches[0]
     target_span = _span(file_path, node)
     card["target"].update({"signature": _signature(node), "source_span": target_span.as_dict()})
     if isinstance(node, ast.AsyncFunctionDef):
         card["diagnostics"].append(_diagnostic("unsupported_target", "Async functions are outside the Slice 1 scope.", target_span))
-    elif node.decorator_list:
-        card["diagnostics"].append(_diagnostic("unsupported_target", "Decorated target functions are outside the Slice 1 scope.", target_span))
     elif _is_generator(node):
         card["diagnostics"].append(_diagnostic("unsupported_target", "Generator functions are outside the Slice 1 scope.", target_span))
     else:

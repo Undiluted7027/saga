@@ -32,6 +32,36 @@ class EscapingExceptionTests(unittest.TestCase):
         self.assertEqual(claim["evidence"]["method"], "explicit_raise_flow")
         self.assertEqual([span["start_line"] for span in claim["source_spans"]], [3, 4])
 
+    def test_assert_after_state_change_reports_conditional_assertion_error(self):
+        card = self.inspect(
+            "def target(value):\n"
+            "    normalized = value.strip()\n"
+            "    assert normalized\n"
+            "    return normalized\n"
+        )
+        claim = next(
+            item
+            for item in self.exceptions(card)
+            if item["statement"]["exception"].get("name") == "AssertionError"
+        )
+        self.assertEqual(
+            claim["statement"]["text"],
+            "May raise AssertionError unless normalized is truthy.",
+        )
+        self.assertEqual(claim["evidence"]["method"], "assert_statement")
+        self.assertIn("not (normalized)", claim["statement"]["condition_source_text"])
+        self.assertIn("__debug__", claim["assumptions"][0]["text"])
+
+    def test_caught_assertion_error_does_not_escape(self):
+        card = self.inspect(
+            "def target(value):\n"
+            "    try:\n"
+            "        assert value\n"
+            "    except AssertionError:\n"
+            "        return None\n"
+        )
+        self.assertFalse(self.exceptions(card))
+
     def test_matching_and_broad_handlers_remove_caught_exceptions(self):
         exact = self.inspect(
             "def target():\n"

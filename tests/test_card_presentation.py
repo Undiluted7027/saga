@@ -41,7 +41,7 @@ class CardPresentationTests(unittest.TestCase):
         focused = focus_card(self.card, "mutation")
         answer = focused_answer(focused, focused["claims"])
         self.assertIsNotNone(answer)
-        self.assertIn("possible write", answer["headline"])
+        self.assertIn("recorded write site", answer["headline"])
         self.assertIn("Unresolved calls remain separate", answer["detail"])
 
     def test_boundaries_are_ranked_by_explicit_claim_links_and_scope(self) -> None:

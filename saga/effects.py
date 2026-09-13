@@ -274,8 +274,36 @@ class _EffectScanner(ast.NodeVisitor):
         self.visit(node.value)
 
     def visit_With(self, node: ast.With) -> None:
-        """Report context-manager semantics that the POC does not model."""
-        self.result.diagnostics.append(_diagnostic("unsupported_semantics", "Context-manager effects are outside the Slice 3 model.", _span(self.path, node), "effects"))
+        """Inspect a context-managed region while exposing entry/exit uncertainty."""
+        self.result.diagnostics.append(_diagnostic("unsupported_semantics", "Context-manager effect control flow is outside the Slice 3 model.", _span(self.path, node), "effects"))
+        boundary = _boundary(
+            self.path,
+            node,
+            "unsupported_semantics",
+            "with statement",
+            (
+                "Behavior in this context-managed region is conditional; Saga does "
+                "not model __enter__, __exit__, or exception suppression."
+            ),
+            concerns=["effects"],
+        )
+        self._limit_boundary(boundary)
+        self.result.boundaries.append(boundary)
+        self.conditional_boundaries.append(boundary)
+        try:
+            for item in node.items:
+                self.visit(item.context_expr)
+                if item.optional_vars is not None:
+                    self._add_write(item.optional_vars)
+                    if isinstance(item.optional_vars, ast.Attribute):
+                        self.visit(item.optional_vars.value)
+                    elif isinstance(item.optional_vars, ast.Subscript):
+                        self.visit(item.optional_vars.value)
+                        self.visit(item.optional_vars.slice)
+            for statement in node.body:
+                self.visit(statement)
+        finally:
+            self.conditional_boundaries.pop()
 
     visit_AsyncWith = visit_With
 

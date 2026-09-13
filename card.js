@@ -154,14 +154,14 @@ function focusedAnswer(card, claims) {
     const effects = direct.filter((claim) => claim.kind === 'known_effect');
     if (!writes.length && !effects.length) {
       return card.boundaries.length ? {
-        headline: 'No supported writes or registered effects.',
+        headline: 'No supported write sites or registered effect sites.',
         detail: 'Effect-relevant unresolved calls are listed as limits, not treated as effects.'
       } : undefined;
     }
     const targets = new Set(writes.map((claim) => claim.statement.source_text || claim.statement.text));
     const parts = [];
-    if (writes.length) parts.push(`${writes.length} possible ${writes.length === 1 ? 'write' : 'writes'} across ${targets.size} ${targets.size === 1 ? 'target' : 'targets'}`);
-    if (effects.length) parts.push(`${effects.length} registered external ${effects.length === 1 ? 'effect' : 'effects'}`);
+    if (writes.length) parts.push(`${writes.length} recorded ${writes.length === 1 ? 'write site' : 'write sites'} across ${targets.size} ${targets.size === 1 ? 'target' : 'targets'}`);
+    if (effects.length) parts.push(`${effects.length} registered external ${effects.length === 1 ? 'effect site' : 'effect sites'}`);
     const joined = parts.join(' and ');
     let detail = 'Unresolved calls remain separate because Saga cannot classify their effects.';
     if (propagatedCount) detail += ` ${propagatedCount} more ${propagatedCount === 1 ? 'claim is' : 'claims are'} kept inside local-call evidence.`;

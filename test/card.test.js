@@ -65,7 +65,7 @@ test('editor groups repeated write records without losing evidence', () => {
 test('editor gives the focused answer before presentation detail', () => {
   const card = focusCard(loadCard(), 'mutation');
   const answer = focusedAnswer(card, card.claims);
-  assert.match(answer.headline, /possible write/);
+  assert.match(answer.headline, /recorded write site/);
   assert.match(answer.detail, /Unresolved calls remain separate/);
 });
 

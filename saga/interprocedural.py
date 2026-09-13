@@ -11,7 +11,7 @@ from .effects import analyze_effects
 from .diagnostics import deduplicate_diagnostics
 from .exceptions import analyze_exceptions, filter_call_exception
 from .guards import analyze_guards
-from .inspect import _span
+from .inspect import _decorator_boundary, _is_overload_declaration, _span
 from .local_calls import LocalCallResolution, call_record, resolve_local_calls
 from .returns import analyze_returns
 
@@ -687,6 +687,20 @@ def _analyze_direct(
             *returns.diagnostics,
         ]),
     )
+    decorator_boundaries = [
+        _decorator_boundary(path, decorator)
+        for decorator in node.decorator_list
+        if not _is_overload_declaration(tree, node)
+    ]
+    if decorator_boundaries:
+        decorator_ids = [item["id"] for item in decorator_boundaries]
+        for claim in evidence.claims:
+            claim["boundary_ids"].extend(
+                boundary_id
+                for boundary_id in decorator_ids
+                if boundary_id not in claim["boundary_ids"]
+            )
+        evidence.boundaries = [*decorator_boundaries, *evidence.boundaries]
     return evidence, resolutions
 
 

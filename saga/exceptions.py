@@ -200,6 +200,67 @@ def _claim(
     }
 
 
+def _assertion_claim(
+    path: str,
+    node: ast.Assert,
+    conditions: tuple[dict[str, Any], ...],
+) -> dict[str, Any]:
+    """Describe the conditional AssertionError established by an assert statement."""
+    failure = _condition(path, node.test, False)
+    all_conditions = (*conditions, failure)
+    requirement = describe_condition(node.test)
+    text = f"May raise AssertionError unless {requirement}."
+    if conditions:
+        text = (
+            "When "
+            + " and ".join(item["text"] for item in conditions)
+            + f", may raise AssertionError unless {requirement}."
+        )
+    return {
+        "id": f"exception-{node.lineno}-{node.col_offset}-assertion",
+        "kind": "explicit_exception",
+        "statement": {
+            "text": text,
+            "type": "explicit_exception",
+            "source_text": source_expression(node),
+            "condition": None,
+            "condition_source_text": " and ".join(
+                item["source_text"] for item in all_conditions
+            ),
+            "path_conditions": list(all_conditions),
+            "exception": {
+                "kind": "builtin_exception",
+                "name": "AssertionError",
+            },
+            "handler_spans": [],
+        },
+        "evidence": {
+            "method": "assert_statement",
+            "evidence_class": "derived",
+            "detail": {},
+        },
+        "source_spans": [
+            *(item["source_span"] for item in all_conditions),
+            _span(path, node).as_dict(),
+        ],
+        "assumptions": [
+            {
+                "text": (
+                    "The assertion depends on __debug__ being true; Python may remove "
+                    "it under optimization."
+                )
+            },
+            {
+                "text": (
+                    "The assertion condition and optional message must finish "
+                    "evaluation; Saga does not infer exceptions raised by them."
+                )
+            },
+        ],
+        "boundary_ids": [],
+    }
+
+
 def _condition(path: str, node: ast.AST, truth: bool) -> dict[str, Any]:
     description = describe_condition(node)
     source = source_expression(node)
@@ -297,6 +358,13 @@ class _ExceptionAnalyzer:
                 self.boundaries.append(boundary)
                 claim["boundary_ids"].append(boundary["id"])
             return [ExceptionFact(claim, names)]
+        if isinstance(node, ast.Assert):
+            return [
+                ExceptionFact(
+                    _assertion_claim(self.path, node, conditions),
+                    ("AssertionError",),
+                )
+            ]
         if isinstance(node, ast.If):
             return [
                 *self.suite(node.body, (*conditions, _condition(self.path, node.test, True)), caught_by),

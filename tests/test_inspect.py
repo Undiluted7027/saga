@@ -40,12 +40,33 @@ class InspectFunctionTests(unittest.TestCase):
         self.assertEqual(card["diagnostics"][0]["kind"], "target_not_found")
 
     def test_unsupported_targets_are_distinct(self):
-        path = self.write("@decorator\ndef decorated():\n    pass\n\nasync def async_fn():\n    pass\n\ndef generated():\n    yield 1\n")
-        self.assertEqual(inspect_function(path, "decorated")["diagnostics"][0]["kind"], "unsupported_target")
-        self.assertIn("Decorated", inspect_function(path, "decorated")["diagnostics"][0]["message"])
+        path = self.write("async def async_fn():\n    pass\n\ndef generated():\n    yield 1\n")
         self.assertIn("Async", inspect_function(path, "async_fn")["diagnostics"][0]["message"])
         self.assertIn("Generator", inspect_function(path, "generated")["diagnostics"][0]["message"])
         self.assertEqual(inspect_function(path, "outer.inner")["diagnostics"][0]["kind"], "unsupported_target")
+
+    def test_overload_declarations_yield_to_the_decorated_implementation(self):
+        path = self.write(
+            "from typing import overload\n\n"
+            "@overload\n"
+            "def parse(value: str) -> str: ...\n\n"
+            "@overload\n"
+            "def parse(value: int) -> int: ...\n\n"
+            "@contract\n"
+            "def parse(value):\n"
+            "    return value\n"
+        )
+        card = inspect_function(path, "parse")
+        self.assertEqual(card["target"]["status"], "supported")
+        self.assertEqual(card["target"]["source_span"]["start_line"], 10)
+        claim = next(item for item in card["claims"] if item["kind"] == "return_dependency")
+        boundary = next(
+            item
+            for item in card["boundaries"]
+            if item["target"]["text"] == "@contract"
+        )
+        self.assertIn(boundary["id"], claim["boundary_ids"])
+        self.assertIn("may replace or wrap", boundary["reason"])
 
     def test_malformed_and_ambiguous_inputs_have_spans_or_details(self):
         malformed = self.write("def broken(:\n")
