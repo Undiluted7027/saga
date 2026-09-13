@@ -256,6 +256,38 @@ class LocalCallTests(unittest.TestCase):
         )
         self.assertFalse(self.propagated(match_capture, "return_dependency"))
 
+    def test_nested_helpers_and_function_local_imports_have_precise_origins(self):
+        nested = self.inspect(
+            "def caller(value):\n"
+            "    def helper(item):\n"
+            "        return item\n"
+            "    return helper(value)\n"
+        )
+        nested_boundary = next(
+            item for item in nested["boundaries"]
+            if item["target"]["text"] == "helper(...)"
+        )
+        self.assertIn("nested function 'helper'", nested_boundary["reason"])
+        self.assertEqual(
+            nested_boundary["callee_origin"],
+            {"kind": "nested_function", "name": "helper", "function": "caller"},
+        )
+
+        local_import = self.inspect(
+            "def caller(value):\n"
+            "    from package import Builder\n"
+            "    return Builder(value)\n"
+        )
+        import_boundary = next(
+            item for item in local_import["boundaries"]
+            if item["target"]["text"] == "Builder(...)"
+        )
+        self.assertIn("import inside 'caller'", import_boundary["reason"])
+        self.assertEqual(
+            import_boundary["callee_origin"],
+            {"kind": "local_import", "name": "Builder", "function": "caller"},
+        )
+
     def test_propagated_return_names_are_labeled_with_callee_scope(self):
         card = self.inspect(
             "def choose_discount(customer_tier, subtotal):\n"

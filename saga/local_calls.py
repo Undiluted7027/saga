@@ -15,6 +15,8 @@ ResolutionStatus = Literal[
     "unsupported",
     "ambiguous",
     "parameter",
+    "nested_function",
+    "local_import",
     "shadowed",
     "external",
 ]
@@ -251,18 +253,30 @@ def resolve_local_calls(
         callee: ast.FunctionDef | ast.AsyncFunctionDef | None = None
         via_alias = False
         if name in scope.bindings:
-            rebound_before_call = any(
-                not isinstance(binding, ast.arg)
+            bindings_before_call = [
+                binding
+                for binding in scope.bindings[name]
+                if not isinstance(binding, ast.arg)
                 and (binding.lineno, binding.col_offset)
                 <= (call.lineno, call.col_offset)
-                for binding in scope.bindings[name]
-            )
+            ]
+            rebound_before_call = bool(bindings_before_call)
             if name in parameter_names and not rebound_before_call:
                 resolutions.append(LocalCallResolution(call, "parameter", invoked_as))
                 continue
             alias = local_aliases.get(name)
             if alias is None or alias[1].lineno >= call.lineno:
-                resolutions.append(LocalCallResolution(call, "shadowed", invoked_as))
+                if len(bindings_before_call) == 1 and isinstance(
+                    bindings_before_call[0], (ast.FunctionDef, ast.AsyncFunctionDef)
+                ):
+                    status: ResolutionStatus = "nested_function"
+                elif bindings_before_call and isinstance(
+                    bindings_before_call[-1], (ast.Import, ast.ImportFrom)
+                ):
+                    status = "local_import"
+                else:
+                    status = "shadowed"
+                resolutions.append(LocalCallResolution(call, status, invoked_as))
                 continue
             callee = alias[0]
             via_alias = True

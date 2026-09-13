@@ -341,6 +341,23 @@ class InspectFunctionTests(unittest.TestCase):
         self.assertIn("item.enabled is truthy", claim["statement"]["text"])
         self.assertIn("item.title equals title", claim["statement"]["text"])
 
+    def test_fallthrough_branches_do_not_add_tautological_conditions(self):
+        path = self.write(
+            "def choose(flag, nested):\n"
+            "    if flag:\n"
+            "        value = 1\n"
+            "    if nested:\n"
+            "        if nested is True:\n"
+            "            value = 2\n"
+            "    return value\n"
+        )
+        claim = next(
+            claim for claim in inspect_function(path, "choose")["claims"]
+            if claim["kind"] == "return_dependency"
+        )
+        self.assertEqual(claim["statement"]["path_conditions"], [])
+        self.assertNotIn(" or ", claim["statement"]["text"])
+
     def test_augmented_assignment_reads_the_previous_definition(self):
         path = self.write("def add_to_seed(y):\n    x = 1\n    x += y\n    return x\n")
         claim = next(claim for claim in inspect_function(path, "add_to_seed")["claims"] if claim["kind"] == "return_dependency")

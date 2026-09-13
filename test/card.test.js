@@ -249,6 +249,26 @@ test('editor mutation view retains effect-relevant boundaries without inventing 
   assert.equal(viewPresentation(focused).empty, false);
 });
 
+test('editor failure view retains unresolved exception sources without inventing claims', () => {
+  const card = loadCard();
+  card.claims = [];
+  card.boundaries = [
+    { ...structuredClone(card.boundaries[1]), id: 'callback', target: { text: 'callback(...)' }, concerns: ['exceptions'] },
+    { ...structuredClone(card.boundaries[1]), id: 'effect', target: { text: 'notify(...)' }, concerns: ['effects'] },
+    { ...structuredClone(card.boundaries[1]), id: 'len', target: { text: 'len(...)' }, category: 'routine' }
+  ];
+
+  const focused = focusCard(card, 'failure');
+
+  assert.deepEqual(focused.claims, []);
+  assert.deepEqual(focused.boundaries.map((item) => item.id), ['callback']);
+  assert.equal(viewPresentation(focused).empty, false);
+  assert.deepEqual(focusedAnswer(focused, focused.claims), {
+    headline: 'No supported explicit failure claims.',
+    detail: 'Unresolved calls may still raise; their exception limits are listed below.'
+  });
+});
+
 test('editor mutation view puts potentially shared writes before local construction', () => {
   const card = loadCard();
   const shared = structuredClone(card.claims.find((claim) => claim.kind === 'attempted_write'));

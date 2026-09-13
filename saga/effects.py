@@ -351,19 +351,23 @@ class _EffectScanner(ast.NodeVisitor):
             self.result.claims.append(claim)
         elif not modeled_exception:
             effect_relevant = self._effect_relevant(node)
+            category = call_category(node)
             reason = (
                 "Saga cannot determine whether this call mutates state or causes an external effect."
                 if effect_relevant
                 else "The callee is not in the effect registry and may affect behavior."
             )
+            concerns = ["effects"] if effect_relevant else []
+            if category != "routine":
+                concerns.append("exceptions")
             boundary = _boundary(
                 self.path,
                 node,
                 "unresolved_call",
                 ast.unparse(node.func) + "(...)",
                 reason,
-                call_category(node),
-                ["effects"] if effect_relevant else None,
+                category,
+                concerns or None,
             )
             self._limit_boundary(boundary)
             self.result.boundaries.append(boundary)

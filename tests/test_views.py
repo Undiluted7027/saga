@@ -60,13 +60,29 @@ class FocusedViewTests(unittest.TestCase):
             {claim["kind"] for claim in failure["claims"]},
             {"rejected_input", "explicit_exception"},
         )
-        for focused in (mutation, failure):
-            related = {
-                boundary_id
-                for claim in focused["claims"]
-                for boundary_id in claim["boundary_ids"]
-            }
-            self.assertEqual({item["id"] for item in focused["boundaries"]}, related)
+        mutation_related = {
+            boundary_id
+            for claim in mutation["claims"]
+            for boundary_id in claim["boundary_ids"]
+        }
+        self.assertEqual(
+            {item["id"] for item in mutation["boundaries"]}, mutation_related
+        )
+        failure_related = {
+            boundary_id
+            for claim in failure["claims"]
+            for boundary_id in claim["boundary_ids"]
+        }
+        self.assertTrue(
+            failure_related <= {item["id"] for item in failure["boundaries"]}
+        )
+        self.assertTrue(
+            all(
+                item["id"] in failure_related
+                or "exceptions" in item.get("concerns", [])
+                for item in failure["boundaries"]
+            )
+        )
 
     def test_mutation_view_keeps_only_effect_relevant_opaque_calls(self):
         path = Path(self.tempdir.name) / "effects.py"
@@ -90,7 +106,7 @@ class FocusedViewTests(unittest.TestCase):
             {"notify(...)", "client.send(...)", "values.append(...)"},
         )
         self.assertTrue(
-            all(item["concerns"] == ["effects"] for item in focused["boundaries"])
+            all("effects" in item["concerns"] for item in focused["boundaries"])
         )
         self.assertTrue(
             all("cannot determine" in item["reason"] for item in focused["boundaries"])
@@ -134,8 +150,28 @@ class FocusedViewTests(unittest.TestCase):
         focused = focus_card(inspect_function(str(path), "target"), "mutation")
         self.assertEqual(len(focused["boundaries"]), 1)
         boundary = focused["boundaries"][0]
-        self.assertEqual(boundary["concerns"], ["effects"])
+        self.assertEqual(boundary["concerns"], ["effects", "exceptions"])
         self.assertIn("cannot determine whether this call mutates state", boundary["reason"])
+
+    def test_failure_view_keeps_unresolved_calls_as_exception_limits(self):
+        path = Path(self.tempdir.name) / "failure_callback.py"
+        path.write_text(
+            "def target(callback, payload):\n"
+            "    result = callback(payload)\n"
+            "    return result\n",
+            encoding="utf-8",
+        )
+        focused = focus_card(inspect_function(str(path), "target"), "failure")
+        self.assertFalse(focused["claims"])
+        self.assertEqual(
+            [item["target"]["text"] for item in focused["boundaries"]],
+            ["callback(...)"],
+        )
+        self.assertIn("exceptions", focused["boundaries"][0]["concerns"])
+        output = terminal(focused)
+        self.assertIn("No supported explicit failure claims", output)
+        self.assertIn("callback(...)", output)
+        self.assertFalse(view_is_empty(focused))
 
     def test_boundary_view_has_boundaries_without_unrelated_claims(self):
         focused = focus_card(self.full, "boundary")

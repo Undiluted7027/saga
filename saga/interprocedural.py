@@ -95,6 +95,8 @@ def _stopping_boundary(
         "unsupported": "The module-local callee uses a function form that Saga does not support.",
         "ambiguous": "The call name has more than one module-level binding, so Saga cannot choose a callee.",
         "parameter": f"The callee is supplied through parameter '{resolution.invoked_as}'; Saga cannot inspect which callable is provided at runtime.",
+        "nested_function": f"The callee is the nested function '{resolution.invoked_as}'; Saga does not analyze nested function bodies.",
+        "local_import": f"The callee '{resolution.invoked_as}' comes from an import inside '{caller.name}'; Saga does not follow function-local imports.",
         "shadowed": "The call name is bound in the caller, so Saga cannot treat it as the module-level function.",
     }
     kinds = {
@@ -103,6 +105,8 @@ def _stopping_boundary(
         "unsupported": "unsupported_local_callee",
         "ambiguous": "ambiguous_local_callee",
         "parameter": "unresolved_call",
+        "nested_function": "unresolved_call",
+        "local_import": "unresolved_call",
         "shadowed": "unresolved_call",
     }
     boundary = {
@@ -118,6 +122,12 @@ def _stopping_boundary(
     if resolution.status == "parameter":
         boundary["callee_origin"] = {
             "kind": "parameter",
+            "name": resolution.invoked_as,
+            "function": caller.name,
+        }
+    elif resolution.status in {"nested_function", "local_import"}:
+        boundary["callee_origin"] = {
+            "kind": resolution.status,
             "name": resolution.invoked_as,
             "function": caller.name,
         }

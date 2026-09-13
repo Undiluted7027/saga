@@ -286,6 +286,26 @@ def _unresolved_write_boundary(path: str, target: ast.AST) -> dict[str, Any]:
 Fallthrough = bool | ast.expr
 
 
+def _same_condition(left: ast.expr, right: ast.expr) -> bool:
+    """Compare generated conditions without depending on source locations."""
+    return ast.dump(left, include_attributes=False) == ast.dump(
+        right, include_attributes=False
+    )
+
+
+def _complementary_conditions(left: ast.expr, right: ast.expr) -> bool:
+    """Recognize one condition paired with Saga's structural negation of it."""
+    return (
+        isinstance(left, ast.UnaryOp)
+        and isinstance(left.op, ast.Not)
+        and _same_condition(left.operand, right)
+    ) or (
+        isinstance(right, ast.UnaryOp)
+        and isinstance(right.op, ast.Not)
+        and _same_condition(right.operand, left)
+    )
+
+
 def _and_fallthrough(left: Fallthrough, right: Fallthrough) -> Fallthrough:
     """Combine two requirements for reaching the next statement."""
     if left is False or right is False:
@@ -294,6 +314,10 @@ def _and_fallthrough(left: Fallthrough, right: Fallthrough) -> Fallthrough:
         return right
     if right is True:
         return left
+    if _same_condition(left, right):
+        return left
+    if _complementary_conditions(left, right):
+        return False
     return ast.BoolOp(op=ast.And(), values=[left, right])
 
 
@@ -305,6 +329,10 @@ def _or_fallthrough(left: Fallthrough, right: Fallthrough) -> Fallthrough:
         return right
     if right is False:
         return left
+    if _same_condition(left, right):
+        return left
+    if _complementary_conditions(left, right):
+        return True
     return ast.BoolOp(op=ast.Or(), values=[left, right])
 
 

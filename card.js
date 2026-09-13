@@ -177,15 +177,25 @@ function focusedAnswer(card, claims) {
     if (localWrites.length) detail += ' Local-container writes build values allocated inside this function; they are separate from potentially aliased targets.';
     return { headline: `${joined[0].toUpperCase()}${joined.slice(1)}.`, detail };
   }
-  if (view === 'failure' && claims.length) {
-    const direct = claims.filter((claim) => !claim.call_chain?.length);
-    const rejected = direct.filter((claim) => claim.kind === 'rejected_input').length;
-    const escaping = direct.filter((claim) => claim.kind === 'explicit_exception').length;
-    const parts = [];
-    if (rejected) parts.push(`${rejected} rejected-input ${rejected === 1 ? 'case' : 'cases'}`);
-    if (escaping) parts.push(`${escaping} explicit ${escaping === 1 ? 'exception' : 'exceptions'}`);
-    const joined = parts.join(' and ');
-    return { headline: `${joined[0].toUpperCase()}${joined.slice(1)}.`, detail: 'Conditions and handler evidence remain attached to each result.' };
+  if (view === 'failure') {
+    if (claims.length) {
+      const direct = claims.filter((claim) => !claim.call_chain?.length);
+      const rejected = direct.filter((claim) => claim.kind === 'rejected_input').length;
+      const escaping = direct.filter((claim) => claim.kind === 'explicit_exception').length;
+      const parts = [];
+      if (rejected) parts.push(`${rejected} rejected-input ${rejected === 1 ? 'case' : 'cases'}`);
+      if (escaping) parts.push(`${escaping} explicit ${escaping === 1 ? 'exception' : 'exceptions'}`);
+      const joined = parts.join(' and ');
+      let detail = 'Conditions and handler evidence remain attached to each result.';
+      if (card.boundaries.length) detail += ' Unresolved calls below may add other failures.';
+      return { headline: `${joined[0].toUpperCase()}${joined.slice(1)}.`, detail };
+    }
+    if (card.boundaries.length) {
+      return {
+        headline: 'No supported explicit failure claims.',
+        detail: 'Unresolved calls may still raise; their exception limits are listed below.'
+      };
+    }
   }
   if (view === 'boundary' && card.boundaries.length) {
     const count = new Set(card.boundaries.map((item) => JSON.stringify([item.kind, item.target.text, item.reason]))).size;
@@ -321,7 +331,11 @@ function focusCard(card, view = 'full') {
   const relatedIds = new Set(claims.flatMap((claim) => claim.boundary_ids));
   const boundaries = view === 'boundary'
     ? [...card.boundaries]
-    : card.boundaries.filter((boundary) => relatedIds.has(boundary.id) || (view === 'mutation' && boundary.concerns?.includes('effects')));
+    : card.boundaries.filter((boundary) =>
+      relatedIds.has(boundary.id)
+      || (view === 'mutation' && boundary.concerns?.includes('effects'))
+      || (view === 'failure' && boundary.concerns?.includes('exceptions'))
+    );
   const relevantAnalyses = VIEW_DIAGNOSTIC_ANALYSES[view];
   const diagnostics = card.diagnostics.filter((diagnostic) =>
     (diagnostic.analyses || ['inspection']).some((analysis) => relevantAnalyses.has(analysis))
@@ -396,7 +410,7 @@ function localCallEvidence(card) {
 function viewPresentation(card) {
   /** Describe the active view and its honest empty state. */
   const view = card.view || 'full';
-  const empty = ['boundary', 'mutation'].includes(view) ? card.claims.length === 0 && card.boundaries.length === 0 : card.claims.length === 0;
+  const empty = ['boundary', 'mutation', 'failure'].includes(view) ? card.claims.length === 0 && card.boundaries.length === 0 : card.claims.length === 0;
   return {
     name: view,
     label: VIEW_LABELS[view],

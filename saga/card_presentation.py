@@ -208,23 +208,35 @@ def focused_answer(
             )
         return {"headline": headline, "detail": detail}
 
-    if view == "failure" and claims:
-        direct = [claim for claim in claims if not claim.get("call_chain")]
-        rejected = sum(claim["kind"] == "rejected_input" for claim in direct)
-        escaping = sum(claim["kind"] == "explicit_exception" for claim in direct)
-        parts = []
-        if rejected:
-            parts.append(
-                f"{rejected} rejected-input {'case' if rejected == 1 else 'cases'}"
-            )
-        if escaping:
-            parts.append(
-                f"{escaping} explicit {'exception' if escaping == 1 else 'exceptions'}"
-            )
-        return {
-            "headline": " and ".join(parts).capitalize() + ".",
-            "detail": "Conditions and handler evidence remain attached to each result.",
-        }
+    if view == "failure":
+        if claims:
+            direct = [claim for claim in claims if not claim.get("call_chain")]
+            rejected = sum(claim["kind"] == "rejected_input" for claim in direct)
+            escaping = sum(claim["kind"] == "explicit_exception" for claim in direct)
+            parts = []
+            if rejected:
+                parts.append(
+                    f"{rejected} rejected-input {'case' if rejected == 1 else 'cases'}"
+                )
+            if escaping:
+                parts.append(
+                    f"{escaping} explicit {'exception' if escaping == 1 else 'exceptions'}"
+                )
+            detail = "Conditions and handler evidence remain attached to each result."
+            if card.get("boundaries"):
+                detail += " Unresolved calls below may add other failures."
+            return {
+                "headline": " and ".join(parts).capitalize() + ".",
+                "detail": detail,
+            }
+        if card.get("boundaries"):
+            return {
+                "headline": "No supported explicit failure claims.",
+                "detail": (
+                    "Unresolved calls may still raise; their exception limits are "
+                    "listed below."
+                ),
+            }
 
     if view == "boundary" and card.get("boundaries"):
         keys = {

@@ -90,6 +90,7 @@ def focus_card(card: dict[str, Any], view: ViewName) -> dict[str, Any]:
             for boundary in card["boundaries"]
             if boundary["id"] in related_ids
             or (view == "mutation" and "effects" in boundary.get("concerns", []))
+            or (view == "failure" and "exceptions" in boundary.get("concerns", []))
         ]
     relevant_analyses = VIEW_DIAGNOSTIC_ANALYSES[view]
     assert relevant_analyses is not None
@@ -120,6 +121,6 @@ def view_is_empty(card: dict[str, Any]) -> bool:
     view: ViewName = card.get("view", "full")
     if view == "boundary":
         return not card["boundaries"]
-    if view == "mutation":
+    if view in {"mutation", "failure"}:
         return not card["claims"] and not card["boundaries"]
     return not card["claims"]
