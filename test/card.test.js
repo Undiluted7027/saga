@@ -69,6 +69,14 @@ test('editor gives the focused answer before presentation detail', () => {
   assert.match(answer.detail, /Unresolved calls remain separate/);
 });
 
+test('editor mutation answer counts evidence inside local calls', () => {
+  const card = loadCard();
+  const write = structuredClone(card.claims.find((item) => item.kind === 'attempted_write'));
+  write.call_chain = [{ callee: 'helper' }];
+  const answer = focusedAnswer({ view: 'mutation', boundaries: [] }, [write]);
+  assert.equal(answer.headline, '1 write site inside local calls.');
+});
+
 test('editor ranks linked caller boundaries without dropping any group', () => {
   const card = focusCard(loadCard(), 'mutation');
   const groups = boundaryGroups(card);

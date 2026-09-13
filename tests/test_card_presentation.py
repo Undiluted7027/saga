@@ -44,6 +44,21 @@ class CardPresentationTests(unittest.TestCase):
         self.assertIn("recorded write site", answer["headline"])
         self.assertIn("Unresolved calls remain separate", answer["detail"])
 
+    def test_mutation_answer_counts_writes_inside_local_calls(self) -> None:
+        write = copy.deepcopy(
+            next(
+                claim
+                for claim in self.card["claims"]
+                if claim["kind"] == "attempted_write"
+            )
+        )
+        write["call_chain"] = [{"callee": "helper"}]
+        answer = focused_answer(
+            {"view": "mutation", "boundaries": []},
+            [write],
+        )
+        self.assertEqual(answer["headline"], "1 write site inside local calls.")
+
     def test_boundaries_are_ranked_by_explicit_claim_links_and_scope(self) -> None:
         focused = focus_card(self.card, "mutation")
         groups = group_boundaries(focused)

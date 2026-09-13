@@ -77,7 +77,7 @@ The POC analyzes Python 3.12 module-level synchronous functions. The target func
 
 - Local, attribute, subscript, and global assignments, including annotated and augmented assignments, plus `global` declarations.
 - Expression statements containing calls.
-- `if`/`else`, `assert`, `raise`, `return`, `for`, and `with` statements.
+- `if`/`else`, `assert`, `raise`, `return`, `for`, `while`, `try`, and `with` statements.
 - Names, constants, attribute and subscript access, calls, boolean operations, comparisons, and unary and binary operations within those statements.
 - A function docstring and `pass`, which produce no behavioral claims.
 
@@ -91,6 +91,7 @@ Syntax support is wider than semantic support. The POC follows these rules:
 - An `assert`-based claim records the assumption that `__debug__` is true. Python may remove assertions when run with optimization.
 - Typing overload declarations are skipped when Saga can identify one concrete implementation. A decorator on that implementation limits every body-derived claim because the runtime wrapper remains unknown.
 - Saga traverses a `with` body, but marks its effects and returns with a context-manager boundary. It does not model entry, exit, or exception suppression.
+- Saga keeps return sites found inside `try` and `while` regions. Those claims remain limited because exact exception transfer, `finally` overrides, iteration counts, and loop exits are not modeled.
 
 Any other statement or expression produces a diagnostic and suppresses claims that would depend on semantics Saga does not model. An unresolved call or dynamic operation produces a boundary attached to the affected analysis.
 

@@ -251,6 +251,63 @@ class InspectFunctionTests(unittest.TestCase):
         self.assertTrue(any(dependency["names"] == ["positive"] for dependency in claims[0]["statement"]["dependencies"]))
         self.assertTrue(any(dependency["names"] == ["negative"] for dependency in claims[1]["statement"]["dependencies"]))
 
+    def test_returns_inside_try_regions_are_kept_with_a_limit(self):
+        path = self.write(
+            "def choose(value, fallback):\n"
+            "    try:\n"
+            "        if value:\n"
+            "            return value\n"
+            "    except ValueError:\n"
+            "        return fallback\n"
+            "    else:\n"
+            "        return None\n"
+        )
+        card = inspect_function(path, "choose")
+        claims = [
+            claim
+            for claim in card["claims"]
+            if claim["kind"] == "return_dependency" and not claim.get("call_chain")
+        ]
+        self.assertEqual(
+            {claim["statement"]["return_expression"] for claim in claims},
+            {"value", "fallback", "None"},
+        )
+        boundary = next(
+            item
+            for item in card["boundaries"]
+            if item["kind"] == "unsupported_semantics"
+            and item["target"]["text"] == "try statement"
+        )
+        self.assertTrue(
+            all(boundary["id"] in claim["boundary_ids"] for claim in claims)
+        )
+
+    def test_return_inside_while_is_not_silently_omitted(self):
+        path = self.write(
+            "def first(items):\n"
+            "    while items:\n"
+            "        if items[0]:\n"
+            "            return items[0]\n"
+            "        items = items[1:]\n"
+            "    return None\n"
+        )
+        card = inspect_function(path, "first")
+        claims = [
+            claim
+            for claim in card["claims"]
+            if claim["kind"] == "return_dependency" and not claim.get("call_chain")
+        ]
+        self.assertEqual(
+            {claim["statement"]["return_expression"] for claim in claims},
+            {"items[0]", "None"},
+        )
+        self.assertTrue(
+            any(
+                "traverses this while statement" in item["message"]
+                for item in card["diagnostics"]
+            )
+        )
+
     def test_augmented_assignment_reads_the_previous_definition(self):
         path = self.write("def add_to_seed(y):\n    x = 1\n    x += y\n    return x\n")
         claim = next(claim for claim in inspect_function(path, "add_to_seed")["claims"] if claim["kind"] == "return_dependency")

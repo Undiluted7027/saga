@@ -77,8 +77,7 @@ test('focused webview collapses propagated evidence beneath a native details gro
   const html = panelHtml(focused, { webview: { cspSource: 'vscode-webview://test' } }, 'vscode-webview://test/media/evidence-card.css');
 
   assert.match(html, /<details class="local-call-evidence">/);
-  assert.match(html, /1 recorded write site across 1 target/);
-  assert.match(html, /1 more claim is kept inside local-call evidence/);
+  assert.match(html, /1 recorded write site across 1 target and 1 write site inside local calls/);
   assert.match(html, /<code>helper\(\.\.\.\)<\/code><small>1 claim · 1 boundary group · 1 diagnostic group<\/small>/);
   assert.ok(html.indexOf('Attempts to write caller state.') < html.indexOf('Evidence inside local calls'));
   assert.ok(html.indexOf('Evidence inside local calls') < html.indexOf('helper(...) may attempt to write callee state.'));

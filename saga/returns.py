@@ -74,7 +74,7 @@ def _definition_names(node: ast.AST) -> set[str]:
     return names
 
 
-_OPAQUE_WEAK_CONTAINERS = (ast.Try, ast.TryStar, ast.While, ast.Match)
+_OPAQUE_WEAK_CONTAINERS = (ast.TryStar, ast.Match)
 
 
 def _write_root(node: ast.AST) -> str | None:
@@ -164,8 +164,12 @@ def _node_reads(node: ast.stmt) -> set[str]:
         return _read_names(node.test)
     if isinstance(node, (ast.For, ast.AsyncFor)):
         return _read_names(node.iter)
+    if isinstance(node, ast.While):
+        return _read_names(node.test)
     if isinstance(node, (ast.With, ast.AsyncWith)):
         return set().union(*(_read_names(item.context_expr) for item in node.items))
+    if isinstance(node, ast.Try):
+        return set()
     reads = _read_names(node)
     if isinstance(node, ast.Assign):
         for target in node.targets:
@@ -233,12 +237,23 @@ def _unsupported_diagnostics(path: str, statement: ast.stmt) -> list[dict[str, A
         if isinstance(item, unsupported):
             key = (type(item).__name__, item.lineno, item.col_offset)
             if key not in seen:
-                message = (
-                    "Saga traverses this context-manager body, but does not model "
-                    "__enter__, __exit__, or exception suppression."
-                    if isinstance(item, (ast.With, ast.AsyncWith))
-                    else f"{type(item).__name__} semantics are outside the Slice 4 return model."
-                )
+                if isinstance(item, (ast.With, ast.AsyncWith)):
+                    message = (
+                        "Saga traverses this context-manager body, but does not model "
+                        "__enter__, __exit__, or exception suppression."
+                    )
+                elif isinstance(item, ast.Try):
+                    message = (
+                        "Saga traverses this try statement, but does not model exact "
+                        "exception transfer or a finally block overriding a return."
+                    )
+                elif isinstance(item, ast.While):
+                    message = (
+                        "Saga traverses this while statement, but does not determine "
+                        "iteration counts or exact break and else behavior."
+                    )
+                else:
+                    message = f"{type(item).__name__} semantics are outside the Slice 4 return model."
                 diagnostics.append(_diagnostic("unsupported_semantics", message, _span(path, item), "returns"))
                 seen.add(key)
     return diagnostics
@@ -355,6 +370,79 @@ class _CFGBuilder:
                     self.edge(exit_node, else_first)
                 return current, else_exits
             return current, {current}
+        if isinstance(statement, ast.While):
+            body_first, body_exits = self.block(
+                statement.body,
+                [*controls, (current, None)],
+            )
+            else_first, else_exits = self.block(
+                statement.orelse,
+                [*controls, (current, None)],
+            )
+            if body_first is not None:
+                self.edge(current, body_first)
+                for exit_node in body_exits:
+                    self.edge(exit_node, current)
+            if else_first is not None:
+                self.edge(current, else_first)
+                for exit_node in body_exits:
+                    self.edge(exit_node, else_first)
+                return current, else_exits
+            return current, {current}
+        if isinstance(statement, ast.Try):
+            before_region = set(self.nodes)
+            body_first, body_exits = self.block(
+                statement.body,
+                [*controls, (current, None)],
+            )
+            if body_first is not None:
+                self.edge(current, body_first)
+            else:
+                body_exits = {current}
+
+            if statement.orelse:
+                else_first, else_exits = self.block(
+                    statement.orelse,
+                    [*controls, (current, None)],
+                )
+                if else_first is not None:
+                    for exit_node in body_exits:
+                        self.edge(exit_node, else_first)
+                    normal_exits = else_exits
+                else:
+                    normal_exits = body_exits
+            else:
+                normal_exits = body_exits
+
+            handler_exits: set[int] = set()
+            for handler in statement.handlers:
+                handler_first, exits = self.block(
+                    handler.body,
+                    [*controls, (current, None)],
+                )
+                if handler_first is not None:
+                    self.edge(current, handler_first)
+                handler_exits.update(exits)
+            region_nodes = set(self.nodes) - before_region
+            exits = normal_exits | handler_exits
+
+            if statement.finalbody:
+                before_final = set(self.nodes)
+                final_first, final_exits = self.block(
+                    statement.finalbody,
+                    [*controls, (current, None)],
+                )
+                if final_first is not None:
+                    # A finally suite can run after normal flow, a handler, a
+                    # return, or a raise. These edges intentionally
+                    # over-approximate which definitions reach it.
+                    for source in {current, *region_nodes, *exits}:
+                        if source != final_first:
+                            self.edge(source, final_first)
+                    return current, final_exits
+                if set(self.nodes) != before_final:
+                    return current, set()
+            return current, exits
         if isinstance(statement, (ast.With, ast.AsyncWith)):
             body_first, body_exits = self.block(
                 statement.body,
@@ -412,6 +500,10 @@ def _call_details(path: str, node: ast.AST) -> list[dict[str, Any]]:
     roots: list[ast.AST]
     if isinstance(node, (ast.With, ast.AsyncWith)):
         roots = [item.context_expr for item in node.items]
+    elif isinstance(node, ast.Try):
+        roots = []
+    elif isinstance(node, ast.While):
+        roots = [node.test]
     else:
         roots = [node]
     for root in roots:

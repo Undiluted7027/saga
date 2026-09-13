@@ -316,7 +316,7 @@ class _EffectScanner(ast.NodeVisitor):
             "unsupported_semantics",
             "try statement",
             (
-                "Effects inside the protected body, handlers, else, and finally are conditional; "
+                "Behavior inside the protected body, handlers, else, and finally is conditional; "
                 "Saga does not determine which blocks execute on a given call."
             ),
             concerns=["effects"],
@@ -348,7 +348,7 @@ class _EffectScanner(ast.NodeVisitor):
             "unsupported_semantics",
             "while statement",
             (
-                "Effects in the loop test, body, and else branch may be conditional or repeated; "
+                "Behavior in the loop test, body, and else branch may be conditional or repeated; "
                 "Saga does not determine which regions execute or how often."
             ),
             concerns=["effects"],

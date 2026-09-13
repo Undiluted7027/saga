@@ -149,10 +149,12 @@ function focusedAnswer(card, claims) {
   }
   if (view === 'mutation') {
     const direct = claims.filter((claim) => !claim.call_chain?.length);
-    const propagatedCount = claims.length - direct.length;
+    const propagated = claims.filter((claim) => claim.call_chain?.length);
     const writes = direct.filter((claim) => claim.kind === 'attempted_write');
     const effects = direct.filter((claim) => claim.kind === 'known_effect');
-    if (!writes.length && !effects.length) {
+    const propagatedWrites = propagated.filter((claim) => claim.kind === 'attempted_write');
+    const propagatedEffects = propagated.filter((claim) => claim.kind === 'known_effect');
+    if (!writes.length && !effects.length && !propagatedWrites.length && !propagatedEffects.length) {
       return card.boundaries.length ? {
         headline: 'No supported write sites or registered effect sites.',
         detail: 'Effect-relevant unresolved calls are listed as limits, not treated as effects.'
@@ -162,9 +164,10 @@ function focusedAnswer(card, claims) {
     const parts = [];
     if (writes.length) parts.push(`${writes.length} recorded ${writes.length === 1 ? 'write site' : 'write sites'} across ${targets.size} ${targets.size === 1 ? 'target' : 'targets'}`);
     if (effects.length) parts.push(`${effects.length} registered external ${effects.length === 1 ? 'effect site' : 'effect sites'}`);
+    if (propagatedWrites.length) parts.push(`${propagatedWrites.length} ${propagatedWrites.length === 1 ? 'write site' : 'write sites'} inside local calls`);
+    if (propagatedEffects.length) parts.push(`${propagatedEffects.length} registered external ${propagatedEffects.length === 1 ? 'effect site' : 'effect sites'} inside local calls`);
     const joined = parts.join(' and ');
     let detail = 'Unresolved calls remain separate because Saga cannot classify their effects.';
-    if (propagatedCount) detail += ` ${propagatedCount} more ${propagatedCount === 1 ? 'claim is' : 'claims are'} kept inside local-call evidence.`;
     return { headline: `${joined[0].toUpperCase()}${joined.slice(1)}.`, detail };
   }
   if (view === 'failure' && claims.length) {

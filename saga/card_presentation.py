@@ -123,10 +123,16 @@ def focused_answer(
 
     if view == "mutation":
         direct = [claim for claim in claims if not claim.get("call_chain")]
-        propagated_count = len(claims) - len(direct)
+        propagated = [claim for claim in claims if claim.get("call_chain")]
         writes = [claim for claim in direct if claim["kind"] == "attempted_write"]
         effects = [claim for claim in direct if claim["kind"] == "known_effect"]
-        if not writes and not effects:
+        propagated_writes = [
+            claim for claim in propagated if claim["kind"] == "attempted_write"
+        ]
+        propagated_effects = [
+            claim for claim in propagated if claim["kind"] == "known_effect"
+        ]
+        if not writes and not effects and not propagated_writes and not propagated_effects:
             if card.get("boundaries"):
                 return {
                     "headline": "No supported write sites or registered effect sites.",
@@ -148,15 +154,22 @@ def focused_answer(
                 f"{len(effects)} registered external "
                 f"{'effect site' if len(effects) == 1 else 'effect sites'}"
             )
+        if propagated_writes:
+            parts.append(
+                f"{len(propagated_writes)} "
+                f"{'write site' if len(propagated_writes) == 1 else 'write sites'} "
+                "inside local calls"
+            )
+        if propagated_effects:
+            parts.append(
+                f"{len(propagated_effects)} registered external "
+                f"{'effect site' if len(propagated_effects) == 1 else 'effect sites'} "
+                "inside local calls"
+            )
         headline = " and ".join(parts).capitalize() + "."
         detail = (
             "Unresolved calls remain separate because Saga cannot classify their effects."
         )
-        if propagated_count:
-            detail += (
-                f" {propagated_count} more "
-                f"{'claim is' if propagated_count == 1 else 'claims are'} kept inside local-call evidence."
-            )
         return {"headline": headline, "detail": detail}
 
     if view == "failure" and claims:
