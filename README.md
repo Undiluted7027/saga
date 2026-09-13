@@ -2,9 +2,10 @@
 
 ## Saga POC
 
-Saga analyzes one supported Python 3.12 module-level function and returns a
-versioned evidence card. Static claims and test observations are separate, and
-every claim links back to source spans.
+Saga analyzes one supported Python 3.12 function or method and returns a
+versioned evidence card. Async targets are accepted, while awaited calls and
+their scheduling behavior remain explicit limits. Static claims and test
+observations are separate, and every claim links back to source spans.
 
 Direct calls to supported synchronous functions in the same module are followed
 for one hop. Propagated facts show the call site, callee, argument bindings, and

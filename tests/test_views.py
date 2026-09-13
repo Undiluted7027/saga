@@ -185,7 +185,7 @@ class FocusedViewTests(unittest.TestCase):
 
     def test_unsupported_target_diagnostic_survives_a_focused_view(self):
         unsupported_path = Path(self.tempdir.name) / "unsupported.py"
-        unsupported_path.write_text("async def target():\n    pass\n", encoding="utf-8")
+        unsupported_path.write_text("def target():\n    yield 1\n", encoding="utf-8")
         focused = focus_card(
             inspect_function(str(unsupported_path), "target"),
             "return",

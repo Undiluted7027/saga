@@ -2,15 +2,18 @@ const vscode = require('vscode');
 const cp = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
-const { targetNameFromLine, validateCard, focusCard, viewPresentation, hoverLines } = require('./card');
+const { targetSelectorAt, validateCard, focusCard, viewPresentation, hoverLines } = require('./card');
 const { panelHtml } = require('./webview');
 
 const staticCardCache = new Map();
 
 function targetName(document, position) {
-  /** Return the function name only when the cursor is on a def statement. */
-  const line = document.lineAt(position.line).text;
-  return targetNameFromLine(line);
+  /** Return the enclosing module function or class-qualified method selector. */
+  const lines = Array.from(
+    { length: document.lineCount },
+    (_, index) => document.lineAt(index).text
+  );
+  return targetSelectorAt(lines, position.line);
 }
 
 function requestCard(context, document, name, force = false) {
@@ -154,7 +157,7 @@ function activate(context) {
       ? await vscode.workspace.openTextDocument(vscode.Uri.file(request.path))
       : activeEditor?.document;
     const name = request?.name || (activeEditor && targetName(activeEditor.document, activeEditor.selection.active));
-    if (!document || !name) return vscode.window.showErrorMessage('Open the evidence card from a function hover or place the cursor on a module-level function definition first.');
+    if (!document || !name) return vscode.window.showErrorMessage('Open the evidence card from a function hover or place the cursor inside a module function or method first.');
     let card;
     try { card = await requestCard(context, document, name); }
     catch (error) { return vscode.window.showErrorMessage('Saga inspection failed: ' + error.message); }
@@ -166,7 +169,7 @@ function activate(context) {
       ? await vscode.workspace.openTextDocument(vscode.Uri.file(request.path))
       : activeEditor?.document;
     const name = request?.name || (activeEditor && targetName(activeEditor.document, activeEditor.selection.active));
-    if (!document || !name) return vscode.window.showErrorMessage('Place the cursor on a module-level function definition first.');
+    if (!document || !name) return vscode.window.showErrorMessage('Place the cursor inside a module function or method first.');
     let card;
     try { card = await requestTestCard(context, document, name); }
     catch (error) { return vscode.window.showErrorMessage('Saga test run failed: ' + error.message); }

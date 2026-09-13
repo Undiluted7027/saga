@@ -6,7 +6,6 @@ import unittest
 from pathlib import Path
 
 from saga.inspect import inspect_function
-from saga.render import terminal
 
 
 class InspectFunctionTests(unittest.TestCase):
@@ -41,9 +40,45 @@ class InspectFunctionTests(unittest.TestCase):
 
     def test_unsupported_targets_are_distinct(self):
         path = self.write("async def async_fn():\n    pass\n\ndef generated():\n    yield 1\n")
-        self.assertIn("Async", inspect_function(path, "async_fn")["diagnostics"][0]["message"])
+        async_card = inspect_function(path, "async_fn")
+        self.assertEqual(async_card["target"]["status"], "supported")
+        self.assertEqual(
+            next(
+                claim for claim in async_card["claims"]
+                if claim["kind"] == "return_dependency"
+            )["statement"]["text"],
+            "Falls through and returns None.",
+        )
         self.assertIn("Generator", inspect_function(path, "generated")["diagnostics"][0]["message"])
-        self.assertEqual(inspect_function(path, "outer.inner")["diagnostics"][0]["kind"], "unsupported_target")
+        self.assertEqual(inspect_function(path, "outer.inner")["diagnostics"][0]["kind"], "target_not_found")
+
+    def test_class_method_and_async_method_are_supported_targets(self):
+        path = self.write(
+            "class Service:\n"
+            "    def choose(self, enabled):\n"
+            "        if enabled:\n"
+            "            return self\n"
+            "        return None\n\n"
+            "    async def send(self, payload):\n"
+            "        await deliver(payload)\n"
+        )
+        method = inspect_function(path, "Service.choose")
+        async_method = inspect_function(path, "Service.send")
+        self.assertEqual(method["target"]["status"], "supported")
+        self.assertEqual(async_method["target"]["status"], "supported")
+        self.assertEqual(method["target"]["qualified_name"], "Service.choose")
+        async_boundary = next(
+            boundary for boundary in async_method["boundaries"]
+            if boundary["target"]["text"] == "async execution"
+        )
+        self.assertIn("cancellation", async_boundary["reason"])
+        self.assertTrue(
+            any(
+                claim["statement"].get("implicit")
+                for claim in async_method["claims"]
+                if claim["kind"] == "return_dependency"
+            )
+        )
 
     def test_overload_declarations_yield_to_the_decorated_implementation(self):
         path = self.write(
@@ -101,6 +136,7 @@ class InspectFunctionTests(unittest.TestCase):
             [sys.executable, "-m", "saga.cli", "inspect", f"{path}::billing"],
             capture_output=True,
             text=True,
+            check=False,
         )
         card = json.loads(result.stdout)
         self.assertEqual(result.returncode, 0)
@@ -472,10 +508,86 @@ class InspectFunctionTests(unittest.TestCase):
         self.assertTrue(any(claim["kind"] == "return_dependency" for claim in card["claims"]))
         self.assertTrue(any(diagnostic["kind"] == "unsupported_semantics" for diagnostic in card["diagnostics"]))
 
-    def test_final_fixture_marks_async_target_unsupported(self):
+    def test_final_fixture_analyzes_async_target_conservatively(self):
         card = inspect_function("fixture/partial_analysis.py", "unsupported_async")
-        self.assertEqual(card["target"]["status"], "unsupported")
-        self.assertEqual(card["diagnostics"][0]["kind"], "unsupported_target")
+        self.assertEqual(card["target"]["status"], "supported")
+        self.assertTrue(
+            any(claim["kind"] == "return_dependency" for claim in card["claims"])
+        )
+
+    def test_except_return_names_the_handler_that_makes_it_reachable(self):
+        path = self.write(
+            "def parse(value):\n"
+            "    try:\n"
+            "        convert(value)\n"
+            "    except ValueError:\n"
+            "        return None\n"
+            "    return value\n"
+        )
+        card = inspect_function(path, "parse")
+        handled = next(
+            claim for claim in card["claims"]
+            if claim["kind"] == "return_dependency"
+            and claim["statement"]["return_expression"] == "None"
+            and not claim["statement"].get("implicit")
+        )
+        self.assertIn(
+            "the ValueError handler runs",
+            handled["statement"]["text"],
+        )
+
+    def test_loop_fallthrough_explains_a_return_after_early_loop_return(self):
+        path = self.write(
+            "def allowed(conn, scopes):\n"
+            "    for scope in scopes:\n"
+            "        if scope not in conn.scopes:\n"
+            "            return False\n"
+            "    return True\n"
+        )
+        card = inspect_function(path, "allowed")
+        accepted = next(
+            claim for claim in card["claims"]
+            if claim["kind"] == "return_dependency"
+            and claim["statement"]["return_expression"] == "True"
+        )
+        self.assertIn(
+            "for every scope in scopes, scope is in conn.scopes",
+            accepted["statement"]["text"],
+        )
+
+    def test_returned_nested_callable_has_an_explicit_behavior_boundary(self):
+        path = self.write(
+            "def factory(client):\n"
+            "    def wrapped(value):\n"
+            "        return client.send(value)\n"
+            "    return wrapped\n"
+        )
+        card = inspect_function(path, "factory")
+        claim = next(
+            item for item in card["claims"] if item["kind"] == "return_dependency"
+        )
+        boundary = next(
+            item for item in card["boundaries"]
+            if item["target"]["text"] == "wrapped"
+        )
+        self.assertIn(boundary["id"], claim["boundary_ids"])
+        self.assertIn("another caller invokes it", boundary["reason"])
+
+    def test_nested_generator_does_not_make_its_factory_a_generator(self):
+        path = self.write(
+            "def factory():\n"
+            "    def generated():\n"
+            "        yield 1\n"
+            "    return generated\n"
+        )
+        card = inspect_function(path, "factory")
+        self.assertEqual(card["target"]["status"], "supported")
+        self.assertTrue(
+            any(
+                boundary["target"]["text"] == "generated"
+                for boundary in card["boundaries"]
+            )
+        )
 
     def test_subscript_and_attribute_writes_reach_the_return(self):
         path = self.write(

@@ -17,7 +17,31 @@ ROUTINE_BUILTINS = {
     "isinstance", "len", "list", "max", "min", "range", "round", "set",
     "sorted", "str", "sum", "tuple", "zip",
 }
-ROUTINE_METHODS = {"get", "items", "keys", "values"}
+ROUTINE_METHODS = {
+    "count",
+    "decode",
+    "encode",
+    "end",
+    "endswith",
+    "finditer",
+    "fullmatch",
+    "get",
+    "groups",
+    "items",
+    "join",
+    "keys",
+    "lower",
+    "lstrip",
+    "replace",
+    "rstrip",
+    "rsplit",
+    "split",
+    "start",
+    "startswith",
+    "strip",
+    "upper",
+    "values",
+}
 
 
 def call_category(node: ast.Call) -> str:
@@ -25,6 +49,13 @@ def call_category(node: ast.Call) -> str:
     if isinstance(node.func, ast.Name) and node.func.id in ROUTINE_BUILTINS:
         return "routine"
     if isinstance(node.func, ast.Attribute) and node.func.attr in ROUTINE_METHODS:
+        return "routine"
+    if (
+        isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "re"
+        and node.func.attr in {"compile", "escape"}
+    ):
         return "routine"
     return "important"
 

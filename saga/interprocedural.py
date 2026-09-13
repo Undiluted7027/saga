@@ -663,7 +663,7 @@ def _propagate_diagnostic(
 def _analyze_direct(
     path: str,
     tree: ast.Module,
-    node: ast.FunctionDef,
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
     ancestry: tuple[str, ...],
     depth: int,
 ) -> tuple[FunctionEvidence, list[LocalCallResolution]]:
@@ -714,7 +714,11 @@ def _analyze_direct(
     return evidence, resolutions
 
 
-def analyze_one_hop(path: str, tree: ast.Module, node: ast.FunctionDef) -> FunctionEvidence:
+def analyze_one_hop(
+    path: str,
+    tree: ast.Module,
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> FunctionEvidence:
     """Analyze a selected function and propagate facts from one local callee hop."""
     evidence, resolutions = _analyze_direct(path, tree, node, (node.name,), 0)
     caller_returns = [claim for claim in evidence.claims if claim["kind"] == "return_dependency"]

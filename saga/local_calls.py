@@ -181,7 +181,7 @@ def _module_aliases(
 
 def _local_aliases(
     tree: ast.Module,
-    node: ast.FunctionDef,
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
     scope: _FunctionScope,
     module_bindings: dict[str, list[ast.AST]],
 ) -> dict[str, tuple[ast.FunctionDef | ast.AsyncFunctionDef, ast.Assign]]:
@@ -210,7 +210,7 @@ def _supported_callee(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
 
 def resolve_local_calls(
     tree: ast.Module,
-    caller: ast.FunctionDef,
+    caller: ast.FunctionDef | ast.AsyncFunctionDef,
     ancestry: tuple[str, ...],
     depth: int,
 ) -> list[LocalCallResolution]:

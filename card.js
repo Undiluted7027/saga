@@ -50,6 +50,47 @@ function targetNameFromLine(line) {
   return match ? match[1] : undefined;
 }
 
+function targetSelectorAt(lines, lineNumber) {
+  /** Find the enclosing function and qualify methods through lexical class blocks. */
+  const indentation = (line) => (line.match(/^\s*/) || [''])[0].replaceAll('\t', '        ').length;
+  const contains = (start, end) => {
+    const base = indentation(lines[start]);
+    for (let index = start + 1; index <= end; index += 1) {
+      const text = lines[index] || '';
+      if (!text.trim() || text.trimStart().startsWith('#')) continue;
+      if (indentation(text) <= base) return false;
+    }
+    return true;
+  };
+  let selected;
+  for (let index = lineNumber; index >= 0; index -= 1) {
+    const match = (lines[index] || '').match(/^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)\s*\(/);
+    if (match && contains(index, lineNumber)) {
+      selected = { name: match[1], line: index, indent: indentation(lines[index]) };
+      break;
+    }
+  }
+  if (!selected) return undefined;
+
+  const classes = [];
+  let child = selected;
+  while (child.indent > 0) {
+    let parent;
+    for (let index = child.line - 1; index >= 0; index -= 1) {
+      const text = lines[index] || '';
+      const match = text.match(/^\s*(class|(?:async\s+)?def)\s+([A-Za-z_]\w*)/);
+      if (!match || indentation(text) >= child.indent || !contains(index, child.line)) continue;
+      parent = { kind: match[1], name: match[2], line: index, indent: indentation(text) };
+      break;
+    }
+    if (!parent) break;
+    if (parent.kind !== 'class') return undefined;
+    classes.unshift(parent.name);
+    child = parent;
+  }
+  return [...classes, selected.name].join('.');
+}
+
 function validateCard(card) {
   /** Return contract errors without changing or interpreting the card. */
   const required = ['schema_version', 'target', 'claims', 'boundaries', 'diagnostics'];
@@ -557,4 +598,4 @@ function hoverLines(card) {
   return lines;
 }
 
-module.exports = { loadCard, targetNameFromLine, validateCard, claimPresentation, claimGroups, focusedAnswer, prioritizeBoundaryGroups, returnPathPresentation, focusCard, localCallEvidence, viewPresentation, observationPresentation, boundaryGroups, diagnosticGroups, hoverLines };
+module.exports = { loadCard, targetNameFromLine, targetSelectorAt, validateCard, claimPresentation, claimGroups, focusedAnswer, prioritizeBoundaryGroups, returnPathPresentation, focusCard, localCallEvidence, viewPresentation, observationPresentation, boundaryGroups, diagnosticGroups, hoverLines };

@@ -38,7 +38,7 @@ Developer sessions can wait. Each new slice must answer a concrete question on n
 The POC and capability revision cover:
 
 - Python 3.12 source files.
-- Module-level synchronous functions.
+- Module-level functions and methods, including async functions.
 - One function selected by `path::qualified_name`.
 - A versioned structured evidence schema.
 - Entry-guard and explicit-exception analysis.
@@ -61,7 +61,7 @@ They do not include:
 - Source-file mutation or generated docstrings.
 - General symbolic execution or whole-program verification.
 - Arbitrary Python versions.
-- Async functions, generators, nested functions, or runtime-generated code.
+- Generator functions, nested-function bodies, or runtime-generated code.
 - Recursive, whole-program, or package-wide interprocedural analysis.
 - Complete type inference.
 - Concept assignment or rationale inference.
@@ -73,7 +73,7 @@ Unsupported constructs produce a specific boundary or diagnostic. They never dis
 
 ### Supported Python subset
 
-The POC analyzes Python 3.12 module-level synchronous functions. The target function may have typed or untyped parameters and may contain:
+The POC analyzes Python 3.12 module-level functions and methods. Synchronous and async targets may have typed or untyped parameters and may contain:
 
 - Local, attribute, subscript, and global assignments, including annotated and augmented assignments, plus `global` declarations.
 - Expression statements containing calls.
@@ -86,6 +86,7 @@ Syntax support is wider than semantic support. The POC follows these rules:
 - Local-name reads and writes use lexical scope within the target function.
 - `if` branches and `for` loops receive conservative control-flow edges. Loop analysis may over-approximate dependencies.
 - A return after a supported `continue` guard retains the condition needed to reach it. Unsupported loop exits remain explicit limits.
+- A return after a loop records the condition required to avoid earlier returns when Saga can express it directly from the loop body.
 - Branch conditions that Saga itself proves exhaustive are omitted from return wording instead of being printed as tautologies.
 - Guard conditions are preserved structurally. Operators are not assumed to have builtin behavior unless the claim records that assumption.
 - Calls are opaque unless a small, explicit registry or a bounded module-local summary provides relevant behavior. Construction of a modeled builtin exception in a `raise` statement is handled by the guard analysis.
@@ -95,6 +96,10 @@ Syntax support is wider than semantic support. The POC follows these rules:
 - Typing overload declarations are skipped when Saga can identify one concrete implementation. A decorator on that implementation limits every body-derived claim because the runtime wrapper remains unknown.
 - Saga traverses a `with` body, but marks its effects and returns with a context-manager boundary. It does not model entry, exit, or exception suppression.
 - Saga keeps return sites found inside `try` and `while` regions. Those claims remain limited because exact exception transfer, `finally` overrides, iteration counts, and loop exits are not modeled.
+- A return inside an exception handler names that handler as a path condition. This records why the return is reachable without claiming which protected operation raised.
+- Normal fallthrough is recorded as an implicit `None` return. Generator functions remain unsupported.
+- Returning a nested function records a boundary: Saga describes the returned object but does not inspect what happens when another caller invokes it.
+- Async targets receive static analysis only. Awaited calls remain unresolved unless an existing model covers them; Saga does not model scheduling or cancellation, and runtime observations still refuse async targets.
 
 Any other statement or expression produces a diagnostic and suppresses claims that would depend on semantics Saga does not model. An unresolved call or dynamic operation produces a boundary attached to the affected analysis.
 

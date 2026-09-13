@@ -88,9 +88,22 @@ def _signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
     return f"{node.name}({', '.join(rendered)})"
 
 
-def _is_generator(node: ast.FunctionDef) -> bool:
-    """Return whether a function body contains a yield expression."""
-    return any(isinstance(item, (ast.Yield, ast.YieldFrom)) for item in ast.walk(node))
+def _is_generator(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Return whether this body yields, without entering nested callables."""
+    deferred = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+
+    def current_scope(item: ast.AST):
+        if isinstance(item, deferred):
+            return
+        yield item
+        for child in ast.iter_child_nodes(item):
+            yield from current_scope(child)
+
+    return any(
+        isinstance(item, (ast.Yield, ast.YieldFrom))
+        for statement in node.body
+        for item in current_scope(statement)
+    )
 
 
 def _overload_decorators(tree: ast.Module) -> tuple[set[str], set[str]]:
@@ -141,6 +154,30 @@ def _select_concrete_function(
     return concrete[0] if len(concrete) == 1 else None
 
 
+def _qualified_function_matches(
+    tree: ast.Module,
+    qualified_name: str,
+) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+    """Find a module function or a method reached only through class bodies."""
+    parts = qualified_name.split(".")
+    body: list[ast.stmt] = tree.body
+    for class_name in parts[:-1]:
+        classes = [
+            item
+            for item in body
+            if isinstance(item, ast.ClassDef) and item.name == class_name
+        ]
+        if len(classes) != 1:
+            return []
+        body = classes[0].body
+    return [
+        item
+        for item in body
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and item.name == parts[-1]
+    ]
+
+
 def _decorator_boundary(path: str, decorator: ast.expr) -> dict[str, Any]:
     """Limit body-derived claims when a decorator may replace the callable."""
     source_text = ast.unparse(decorator)
@@ -157,6 +194,22 @@ def _decorator_boundary(path: str, decorator: ast.expr) -> dict[str, Any]:
     }
 
 
+def _async_boundary(path: str, node: ast.AsyncFunctionDef) -> dict[str, Any]:
+    """Keep body claims separate from unmodeled coroutine runtime behavior."""
+    return {
+        "id": f"inspection-boundary-{node.lineno}-{node.col_offset}-async-runtime",
+        "kind": "unsupported_semantics",
+        "target": {"text": "async execution"},
+        "reason": (
+            "Saga analyzes the coroutine body, but does not model scheduling, "
+            "cancellation, or await-protocol behavior."
+        ),
+        "category": "important",
+        "concerns": ["returns", "effects", "exceptions"],
+        "source_span": _span(path, node).as_dict(),
+    }
+
+
 def _base_card(path: str, qualified_name: str) -> dict[str, Any]:
     """Create an empty, schema-shaped card for a target under inspection."""
     return {
@@ -166,6 +219,7 @@ def _base_card(path: str, qualified_name: str) -> dict[str, Any]:
             "qualified_name": qualified_name,
             "name": qualified_name.rsplit(".", 1)[-1],
             "signature": "",
+            "is_async": False,
             "status": "unsupported",
             "source_span": None,
         },
@@ -176,7 +230,7 @@ def _base_card(path: str, qualified_name: str) -> dict[str, Any]:
 
 
 def inspect_function(file_path: str, qualified_name: str) -> dict[str, Any]:
-    """Return one schema-shaped card for a module-level function selector."""
+    """Return one schema-shaped card for a module function or class method."""
     card = _base_card(file_path, qualified_name)
     source = Path(file_path)
     if not source.exists():
@@ -194,23 +248,22 @@ def inspect_function(file_path: str, qualified_name: str) -> dict[str, Any]:
         card["diagnostics"].append(_diagnostic("parsing", f"Could not parse {file_path}: {exc.msg}", Span(file_path, exc.lineno or 1, exc.offset or 0, exc.lineno or 1, exc.offset or 0)))
         return card
 
-    if "." in qualified_name:
-        card["diagnostics"].append(_diagnostic("unsupported_target", f"Only module-level functions are supported; '{qualified_name}' is qualified."))
-        return card
-    matches = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == qualified_name]
+    matches = _qualified_function_matches(tree, qualified_name)
     if not matches:
-        card["diagnostics"].append(_diagnostic("target_not_found", f"No module-level function named '{qualified_name}' was found in {file_path}."))
+        card["diagnostics"].append(_diagnostic("target_not_found", f"No function or class method named '{qualified_name}' was found in {file_path}."))
         return card
     node = _select_concrete_function(tree, matches)
     if node is None:
-        card["diagnostics"].append(_diagnostic("ambiguous_target", f"Selector '{qualified_name}' matches {len(matches)} module-level functions."))
+        card["diagnostics"].append(_diagnostic("ambiguous_target", f"Selector '{qualified_name}' matches {len(matches)} concrete functions."))
         return card
 
     target_span = _span(file_path, node)
-    card["target"].update({"signature": _signature(node), "source_span": target_span.as_dict()})
-    if isinstance(node, ast.AsyncFunctionDef):
-        card["diagnostics"].append(_diagnostic("unsupported_target", "Async functions are outside the Slice 1 scope.", target_span))
-    elif _is_generator(node):
+    card["target"].update({
+        "signature": _signature(node),
+        "is_async": isinstance(node, ast.AsyncFunctionDef),
+        "source_span": target_span.as_dict(),
+    })
+    if _is_generator(node):
         card["diagnostics"].append(_diagnostic("unsupported_target", "Generator functions are outside the Slice 1 scope.", target_span))
     else:
         card["target"]["status"] = "supported"
@@ -220,4 +273,10 @@ def inspect_function(file_path: str, qualified_name: str) -> dict[str, Any]:
         card["claims"].extend(evidence.claims)
         card["boundaries"].extend(evidence.boundaries)
         card["diagnostics"].extend(evidence.diagnostics)
+        if isinstance(node, ast.AsyncFunctionDef):
+            boundary = _async_boundary(file_path, node)
+            card["boundaries"].insert(0, boundary)
+            for claim in card["claims"]:
+                if boundary["id"] not in claim["boundary_ids"]:
+                    claim["boundary_ids"].append(boundary["id"])
     return card

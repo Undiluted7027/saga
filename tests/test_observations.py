@@ -220,7 +220,10 @@ class ObservationTests(unittest.TestCase):
             path = Path(directory) / "module.py"
             path.write_text("def target(value):\n    if value < 0:\n        raise ValueError('negative')\n    return value\n", encoding="utf-8")
             namespace = {}
-            exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), namespace)
+            exec(  # noqa: S102 - isolated fixture code exercises frame tracing
+                compile(path.read_text(encoding="utf-8"), str(path), "exec"),
+                namespace,
+            )
             tracer = TargetTracer(str(path), "target")
             tracer.test_id = "test_boundary"
             previous = sys.gettrace()
@@ -233,6 +236,34 @@ class ObservationTests(unittest.TestCase):
                 sys.settrace(previous)
             self.assertEqual([item["outcome"] for item in tracer.executions], ["return", "raise"])
             self.assertEqual(tracer.executions[1]["exception"]["type"], "ValueError")
+
+    def test_method_trace_matches_the_qualified_name_not_a_same_named_function(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "module.py"
+            path.write_text(
+                "def run(value):\n    return value + 1\n\n"
+                "class Worker:\n"
+                "    def run(self, value):\n"
+                "        return value * 2\n",
+                encoding="utf-8",
+            )
+            namespace = {}
+            exec(  # noqa: S102 - isolated fixture code exercises frame tracing
+                compile(path.read_text(encoding="utf-8"), str(path), "exec"),
+                namespace,
+            )
+            tracer = TargetTracer(str(path), "Worker.run")
+            tracer.test_id = "test_method"
+            previous = sys.gettrace()
+            sys.settrace(tracer.trace)
+            try:
+                namespace["run"](3)
+                namespace["Worker"]().run(3)
+            finally:
+                sys.settrace(previous)
+
+        self.assertEqual(len(tracer.executions), 1)
+        self.assertEqual(tracer.executions[0]["return"], 6)
 
 
 if __name__ == "__main__":

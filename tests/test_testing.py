@@ -73,6 +73,28 @@ class TestCommandStatusTests(unittest.TestCase):
             for item in card["diagnostics"]
         ))
 
+    def test_async_target_refuses_runtime_observation_before_pytest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "module.py"
+            target.write_text(
+                "async def target(value):\n    return value\n",
+                encoding="utf-8",
+            )
+            with patch("saga.testing.subprocess.run") as run:
+                card, exit_code = run_tests(
+                    f"{target}::target",
+                    [],
+                    str(Path(directory) / "trace.json"),
+                    directory,
+                )
+
+        self.assertEqual(exit_code, 1)
+        run.assert_not_called()
+        self.assertIn(
+            "do not yet support async targets",
+            card["diagnostics"][-1]["message"],
+        )
+
     def test_instrumented_callbacks_leave_one_distinct_usable_input(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

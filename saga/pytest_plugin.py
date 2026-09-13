@@ -18,13 +18,18 @@ class TargetTracer:
     def __init__(self, path: str, qualified_name: str) -> None:
         self.path = os.path.realpath(path)
         self.name = qualified_name.rsplit(".", 1)[-1]
+        self.qualified_name = qualified_name
         self.test_id: str | None = None
         self.frames: dict[int, dict[str, Any]] = {}
         self.executions: list[dict[str, Any]] = []
 
     def _matches(self, frame: Any) -> bool:
         """Match by code path and function name without importing the target."""
-        return os.path.realpath(frame.f_code.co_filename) == self.path and frame.f_code.co_name == self.name
+        return (
+            os.path.realpath(frame.f_code.co_filename) == self.path
+            and frame.f_code.co_name == self.name
+            and frame.f_code.co_qualname == self.qualified_name
+        )
 
     def _inputs(self, frame: Any) -> dict[str, Any]:
         """Capture bounded argument structure at the selected function boundary."""
@@ -63,7 +68,7 @@ class TargetTracer:
         """Write the versioned trace after pytest has finished executing tests."""
         payload = {
             "trace_schema_version": TRACE_SCHEMA_VERSION,
-            "target": {"path": self.path, "qualified_name": self.name},
+            "target": {"path": self.path, "qualified_name": self.qualified_name},
             "environment": {"python_version": sys.version.split()[0], "platform": platform.platform()},
             "executions": self.executions,
         }

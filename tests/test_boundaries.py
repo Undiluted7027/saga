@@ -202,6 +202,27 @@ class BoundaryGroupingTests(unittest.TestCase):
         self.assertEqual(by_target["values.append(...)"]["category"], "important")
         self.assertEqual(by_target["mapping.get(...)"]["category"], "routine")
 
+    def test_familiar_read_only_transforms_are_routine_boundaries(self):
+        tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        path = Path(tempdir.name) / "module.py"
+        path.write_text(
+            "import re\n\n"
+            "def target(text, pattern):\n"
+            "    if text.startswith('/'):\n"
+            "        return pattern.fullmatch(text.strip())\n"
+            "    return re.compile(re.escape(text.rstrip('/')))\n",
+            encoding="utf-8",
+        )
+        groups = group_boundaries(inspect_function(str(path), "target"))
+        by_target = {group["target"]: group for group in groups}
+        self.assertEqual(by_target["text.startswith(...)"]["category"], "routine")
+        self.assertEqual(by_target["pattern.fullmatch(...)"]["category"], "routine")
+        self.assertEqual(by_target["text.strip(...)"]["category"], "routine")
+        self.assertEqual(by_target["text.rstrip(...)"]["category"], "routine")
+        self.assertEqual(by_target["re.escape(...)"]["category"], "routine")
+        self.assertEqual(by_target["re.compile(...)"]["category"], "routine")
+
 
 if __name__ == "__main__":
     unittest.main()

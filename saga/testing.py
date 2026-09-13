@@ -29,6 +29,16 @@ def run_tests(selector: str, pytest_args: list[str], trace_output: str = ".saga/
     card = inspect_function(file_path, qualified_name)
     if card_exit_code(card):
         return card, card_exit_code(card)
+    if card["target"].get("is_async"):
+        card["diagnostics"].append({
+            "kind": "instrumentation",
+            "message": (
+                "Runtime observations do not yet support async targets; static "
+                "evidence remains available without running tests."
+            ),
+            "analyses": ["observations"],
+        })
+        return card, 1
     destination = Path(trace_output)
     if not destination.is_absolute():
         destination = Path(cwd or os.getcwd()) / destination
@@ -40,7 +50,14 @@ def run_tests(selector: str, pytest_args: list[str], trace_output: str = ".saga/
     environment = os.environ.copy()
     environment["SAGA_TRACE_CONFIG"] = str(settings_path)
     try:
-        process = subprocess.run([sys.executable, "-m", "pytest", "-p", "saga.pytest_plugin", *pytest_args], cwd=cwd, env=environment, capture_output=True, text=True)
+        process = subprocess.run(
+            [sys.executable, "-m", "pytest", "-p", "saga.pytest_plugin", *pytest_args],
+            cwd=cwd,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
     except OSError as exc:
         card["diagnostics"].append({"kind": "test_run", "message": f"Could not start pytest: {exc}", "analyses": ["observations"]})
         return card, 1

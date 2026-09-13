@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .guards import BUILTIN_EXCEPTIONS
-from .inspect import Span, _diagnostic, _span
+from .inspect import _diagnostic, _span
 from .presentation import condition_is_compound, describe_condition, source_expression
 
 
@@ -20,7 +20,7 @@ class CFGNode:
     reads: set[str]
     definitions: set[str]
     weak_definitions: set[str] = field(default_factory=set)
-    controls: list[tuple[int, bool | None]] = field(default_factory=list)
+    controls: list[tuple[int, bool | str | None]] = field(default_factory=list)
     successors: set[int] = field(default_factory=set)
     predecessors: set[int] = field(default_factory=set)
 
@@ -383,8 +383,9 @@ class _CFGBuilder:
         self.write_boundaries: list[tuple[int, dict[str, Any]]] = []
         self.gates_next: dict[int, bool] = {}
         self.gate_conditions: dict[int, ast.expr] = {}
+        self.control_descriptions: dict[tuple[int, str], dict[str, Any]] = {}
 
-    def node(self, statement: ast.stmt, controls: list[tuple[int, bool | None]]) -> int:
+    def node(self, statement: ast.stmt, controls: list[tuple[int, bool | str | None]]) -> int:
         """Create one CFG node with lexical reads, definitions, and controllers."""
         node_id = self.next_id
         self.next_id += 1
@@ -413,7 +414,7 @@ class _CFGBuilder:
             stack.extend(self.nodes[current].predecessors)
         return seen
 
-    def block(self, statements: list[ast.stmt], controls: list[tuple[int, bool | None]]) -> tuple[int | None, set[int]]:
+    def block(self, statements: list[ast.stmt], controls: list[tuple[int, bool | str | None]]) -> tuple[int | None, set[int]]:
         """Build a block and return its entry node and fall-through exits."""
         first: int | None = None
         exits: set[int] = set()
@@ -429,6 +430,8 @@ class _CFGBuilder:
                 active_controls.append((entry, True))
             elif entry in self.gates_next:
                 active_controls.append((entry, self.gates_next[entry]))
+            elif (entry, "loop_fallthrough") in self.control_descriptions:
+                active_controls.append((entry, "loop_fallthrough"))
             elif isinstance(statement, ast.If):
                 fallthrough = _statement_fallthrough(statement)
                 if isinstance(fallthrough, ast.expr):
@@ -436,7 +439,7 @@ class _CFGBuilder:
                     active_controls.append((entry, True))
         return first, exits
 
-    def statement(self, statement: ast.stmt, controls: list[tuple[int, bool | None]]) -> tuple[int, set[int]]:
+    def statement(self, statement: ast.stmt, controls: list[tuple[int, bool | str | None]]) -> tuple[int, set[int]]:
         """Build one statement, including branch and loop edges."""
         current = self.node(statement, controls)
         if isinstance(statement, ast.If):
@@ -467,6 +470,27 @@ class _CFGBuilder:
                 for exit_node in body_exits:
                     self.edge(exit_node, else_first)
                 return current, else_exits
+            if not any(
+                isinstance(item, (ast.Break, ast.Continue))
+                for child in statement.body
+                for item in _walk_current_scope(child)
+            ):
+                fallthrough = _suite_fallthrough(statement.body)
+                if isinstance(fallthrough, ast.expr):
+                    target = source_expression(statement.target)
+                    iterable = source_expression(statement.iter)
+                    self.control_descriptions[(current, "loop_fallthrough")] = {
+                        "text": (
+                            f"for every {target} in {iterable}, "
+                            f"{describe_condition(fallthrough, True)}"
+                        ),
+                        "source_text": (
+                            f"all({source_expression(fallthrough)} "
+                            f"for {target} in {iterable})"
+                        ),
+                        "source_span": _span(self.path, statement).as_dict(),
+                        "compound": True,
+                    }
             return current, {current}
         if isinstance(statement, ast.While):
             body_first, body_exits = self.block(
@@ -513,10 +537,18 @@ class _CFGBuilder:
                 normal_exits = body_exits
 
             handler_exits: set[int] = set()
-            for handler in statement.handlers:
+            for index, handler in enumerate(statement.handlers):
+                label = f"except:{index}"
+                exception = source_expression(handler.type) if handler.type else "bare except"
+                self.control_descriptions[(current, label)] = {
+                    "text": f"the {exception} handler runs",
+                    "source_text": f"except {exception}",
+                    "source_span": _span(self.path, handler).as_dict(),
+                    "compound": False,
+                }
                 handler_first, exits = self.block(
                     handler.body,
-                    [*controls, (current, None)],
+                    [*controls, (current, label)],
                 )
                 if handler_first is not None:
                     self.edge(current, handler_first)
@@ -728,15 +760,29 @@ def _claim(path: str, return_node: CFGNode, included: set[int], builder: _CFGBui
     path_conditions = []
     compound_conditions: list[bool] = []
     path_assumptions: list[dict[str, str]] = []
-    seen_conditions: set[tuple[int, bool]] = set()
+    seen_conditions: set[tuple[int, bool | str]] = set()
     for control_id, expected in return_node.controls:
         control = builder.nodes[control_id].statement
-        if expected is None or not isinstance(control, (ast.If, ast.Assert)):
+        if expected is None:
             continue
         key = (control_id, expected)
         if key in seen_conditions:
             continue
         seen_conditions.add(key)
+        if isinstance(expected, str):
+            detail = builder.control_descriptions.get((control_id, expected))
+            if detail is None:
+                continue
+            path_conditions.append({
+                "text": detail["text"],
+                "expected": True,
+                "source_text": detail["source_text"],
+                "source_span": detail["source_span"],
+            })
+            compound_conditions.append(detail["compound"])
+            continue
+        if not isinstance(control, (ast.If, ast.Assert)):
+            continue
         test = builder.gate_conditions.get(control_id, control.test)
         path_conditions.append({
             "text": describe_condition(test, expected),
@@ -755,7 +801,12 @@ def _claim(path: str, return_node: CFGNode, included: set[int], builder: _CFGBui
         for item, compound in zip(path_conditions, compound_conditions)
     ]
     path_suffix = " when " + " and ".join(rendered_conditions) if rendered_conditions else ""
-    summary = f"Returns {returned}{path_suffix}."
+    implicit = bool(getattr(return_node.statement, "_saga_implicit", False))
+    summary = (
+        f"Falls through and returns None{path_suffix}."
+        if implicit
+        else f"Returns {returned}{path_suffix}."
+    )
     assumptions = [{"text": "The slice is intraprocedural and conservative; included statements may not affect every execution."}, *path_assumptions]
     if weak_definitions:
         assumptions.append({
@@ -773,6 +824,7 @@ def _claim(path: str, return_node: CFGNode, included: set[int], builder: _CFGBui
             "type": "return_dependency",
             "source_text": returned,
             "return_expression": returned,
+            "implicit": implicit,
             "path_conditions": path_conditions,
             "inputs": inputs,
             "definitions": sorted(definitions),
@@ -787,10 +839,38 @@ def _claim(path: str, return_node: CFGNode, included: set[int], builder: _CFGBui
     }
 
 
-def analyze_returns(path: str, node: ast.FunctionDef, boundaries: list[dict[str, Any]]) -> ReturnResult:
+def analyze_returns(
+    path: str,
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    boundaries: list[dict[str, Any]],
+) -> ReturnResult:
     """Compute a conservative may-affect slice for every return in a function."""
     builder = _CFGBuilder(path)
-    first, _ = builder.block(node.body, [])
+    first, exits = builder.block(node.body, [])
+    if exits or first is None:
+        exit_controls: list[set[tuple[int, bool | str | None]]] = []
+        for exit_id in exits:
+            controls = set(builder.nodes[exit_id].controls)
+            if (exit_id, "loop_fallthrough") in builder.control_descriptions:
+                controls.add((exit_id, "loop_fallthrough"))
+            exit_controls.append(controls)
+        common_controls = (
+            set.intersection(*exit_controls) if exit_controls else set()
+        )
+        implicit_return = ast.Return(value=None)
+        implicit_return.lineno = getattr(node, "end_lineno", node.lineno)
+        implicit_return.end_lineno = implicit_return.lineno
+        implicit_return.col_offset = node.col_offset + 4
+        implicit_return.end_col_offset = implicit_return.col_offset
+        implicit_return._saga_implicit = True  # type: ignore[attr-defined]
+        implicit_id = builder.node(
+            implicit_return,
+            sorted(common_controls, key=lambda item: (item[0], str(item[1]))),
+        )
+        for exit_id in exits:
+            builder.edge(exit_id, implicit_id)
+        if first is None:
+            first = implicit_id
     if first is None:
         return ReturnResult([], builder.diagnostics)
     incoming = _dataflow(builder)
@@ -808,6 +888,12 @@ def analyze_returns(path: str, node: ast.FunctionDef, boundaries: list[dict[str,
             continue
         break
     claims: list[dict[str, Any]] = []
+    return_boundaries: list[dict[str, Any]] = []
+    nested_functions = {
+        statement.name: statement
+        for statement in node.body
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
     for return_node in [item for item in builder.nodes.values() if isinstance(item.statement, ast.Return)]:
         included: set[int] = {return_node.node_id}
         worklist = [return_node.node_id]
@@ -845,5 +931,35 @@ def analyze_returns(path: str, node: ast.FunctionDef, boundaries: list[dict[str,
             }
             if relevant_ids:
                 claim["boundary_ids"] = sorted({*claim["boundary_ids"], *relevant_ids})
+        returned_value = return_node.statement.value
+        if (
+            isinstance(returned_value, ast.Name)
+            and returned_value.id in nested_functions
+        ):
+            nested = nested_functions[returned_value.id]
+            boundary = {
+                "id": (
+                    f"return-boundary-{return_node.statement.lineno}-"
+                    f"{return_node.statement.col_offset}-nested_callable"
+                ),
+                "kind": "unsupported_semantics",
+                "target": {"text": returned_value.id},
+                "reason": (
+                    "The returned value is a nested function. Saga does not analyze "
+                    "the behavior that occurs when another caller invokes it."
+                ),
+                "category": "important",
+                "concerns": ["returns", "effects", "exceptions"],
+                "source_span": _span(path, nested).as_dict(),
+            }
+            claim["boundary_ids"] = sorted({*claim["boundary_ids"], boundary["id"]})
+            return_boundaries.append(boundary)
         claims.append(claim)
-    return ReturnResult(claims, builder.diagnostics, [boundary for _, boundary in builder.write_boundaries])
+    return ReturnResult(
+        claims,
+        builder.diagnostics,
+        [
+            *(boundary for _, boundary in builder.write_boundaries),
+            *return_boundaries,
+        ],
+    )

@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { loadCard, targetNameFromLine, validateCard, claimPresentation, claimGroups, focusedAnswer, prioritizeBoundaryGroups, returnPathPresentation, focusCard, localCallEvidence, viewPresentation, observationPresentation, boundaryGroups, diagnosticGroups, hoverLines } = require('../card');
+const { loadCard, targetNameFromLine, targetSelectorAt, validateCard, claimPresentation, claimGroups, focusedAnswer, prioritizeBoundaryGroups, returnPathPresentation, focusCard, localCallEvidence, viewPresentation, observationPresentation, boundaryGroups, diagnosticGroups, hoverLines } = require('../card');
 
 test('fixture validates against the evidence-card contract', () => {
   const card = loadCard();
@@ -19,6 +19,31 @@ test('target selection uses the function name rather than the word under the cur
   assert.equal(targetNameFromLine('def process_order(order):'), 'process_order');
   assert.equal(targetNameFromLine('async def process_order(order):'), 'process_order');
   assert.equal(targetNameFromLine('    def nested(order):'), undefined);
+});
+
+test('target selection works inside functions and qualifies class methods', () => {
+  const lines = [
+    'class Router:',
+    '    async def app(self, scope):',
+    '        if scope:',
+    '            return scope',
+    '',
+    'def top_level(value):',
+    '    return value',
+  ];
+  assert.equal(targetSelectorAt(lines, 3), 'Router.app');
+  assert.equal(targetSelectorAt(lines, 6), 'top_level');
+});
+
+test('target selection refuses nested function bodies', () => {
+  const lines = [
+    'def factory():',
+    '    def nested():',
+    '        return 1',
+    '    return nested',
+  ];
+  assert.equal(targetSelectorAt(lines, 2), undefined);
+  assert.equal(targetSelectorAt(lines, 3), 'factory');
 });
 
 test('fixture exercises every Slice 0 result kind', () => {
